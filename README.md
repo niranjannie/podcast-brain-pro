@@ -76,17 +76,13 @@ Full setup guide: [`docs/SETUP.md`](./docs/SETUP.md)
 
 ---
 
-## 🆚 How It Compares
+## 🎯 What Makes It Different
 
-| Feature | Podcast Brain Pro | ElevenLabs | NotebookLM |
-|---------|------------------|------------|------------|
-| **Cost** | Free (MIT) | ~$0.30/min | Free (Google) |
-| **Runs locally** | ✅ Yes | ❌ Cloud only | ❌ Cloud only |
-| **Indian languages** | ✅ 10 languages | ⚠️ Limited | ❌ No |
-| **Interview/Panel** | ✅ Natural dialogue | ⚠️ Single voice | ⚠️ Summary only |
-| **RSS feed export** | ✅ Built-in | ❌ No | ❌ No |
-| **Open source** | ✅ Full code | ❌ Proprietary | ❌ Proprietary |
-| **Data privacy** | ✅ 100% local | ❌ Sent to cloud | ❌ Sent to Google |
+- **Runs entirely on your machine** — Audio synthesis happens locally. No data leaves your computer.
+- **10 Indian languages** — Hindi, Kannada, Tamil, Telugu, Marathi, Bengali, Gujarati, Malayalam, Punjabi, Assamese. Built for multilingual creators.
+- **Natural dialogue formats** — Not just reading text aloud. Interview and panel modes generate interruptions, disagreements, and follow-ups.
+- **RSS feed built-in** — Generate once, publish everywhere. No extra tools needed.
+- **Truly open source** — MIT licensed. Full code, full control, zero restrictions.
 
 ---
 
