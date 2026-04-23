@@ -1,56 +1,99 @@
-# Podcast Brain Pro — Visibility & Growth Playbook
+# Podcast Brain Pro — Realistic GitHub Visibility Plan
 
-> Your repo: `https://github.com/niranjannie/podcast-brain-pro`  
-> Your landing page: `https://frontend-chi-virid-53.vercel.app/landing`
-
----
-
-## Phase 1: Foundation (Do This First)
-
-### 1. GitHub Repo Polish
-
-Your README is your storefront. Most visitors will land on GitHub first, not your landing page.
-
-**README must-haves:**
-- [ ] **Hero GIF/video** at the top — 10-15 seconds showing "type topic → get podcast" in one loop
-- [ ] **One-liner** above the fold: *"Turn any topic into a studio-quality podcast — locally, in any language, with AI."*
-- [ ] **Badges**: Build (passing), License (MIT), Stars, Python version, Node version
-- [ ] **30-second quickstart** — copy-paste 3 commands to run
-- [ ] **Audio embeds** — link to your landing page samples so people can hear before they install
-- [ ] **Screenshot grid** — Settings UI, generated script, audio player, RSS feed
-- [ ] **"Why this exists"** section — the story from your script (2-3 paragraphs)
-- [ ] **Comparison table** — vs ElevenLabs, vs NotebookLM, vs Descript (highlight: free, local, open-source)
-- [ ] **Contributing.md** link + `good first issue` labels
-
-**Tools for badges:** [shields.io](https://shields.io)
-
-### 2. Landing Page Conversion Checklist
-
-Current landing page is good. To make it convert better:
-
-- [ ] **Lead with emotion, not features** — Your script's "Imagine this..." hook should be the first thing people read
-- [ ] **Social proof** — "Join X creators" or GitHub star count badge
-- [ ] **One clear CTA above the fold** — "Star on GitHub" (primary) + "Try the Demo" (secondary)
-- [ ] **Remove friction words** — Replace "This page is a static preview" with something positive like "Hear live samples below — clone to generate your own"
-- [ ] **Add a "Star on GitHub" button** in the hero (not just "Download")
-- [ ] **FAQ section** — addresses "Is it really free?", "Do I need a GPU?", "What languages?"
-- [ ] **Newsletter signup** — Even a simple "Get notified of new features" form (use Buttondown or ConvertKit)
+> Landing: https://frontend-chi-virid-53.vercel.app/landing  
+> Repo: https://github.com/niranjannie/podcast-brain-pro
 
 ---
 
-## Phase 2: Launch Channels
+## What Actually Works for GitHub Stars
 
-### Hacker News — "Show HN"
+Based on research from projects that went from 0 → 1000+ stars, here's what actually moves the needle:
 
-**Best time to post**: Tuesday–Thursday, 7–10 AM US Pacific Time (catches both US West Coast morning and East Coast lunch)
+| Tactic | Effort | Impact | Do It? |
+|--------|--------|--------|--------|
+| Polished README with GIF | 2-3 hrs | **High** | ✅ Must |
+| Hacker News "Show HN" | 30 min | **High** | ✅ Must |
+| Reddit posts (2-3 subs) | 1 hr total | **Medium-High** | ✅ Do |
+| Dev.to / Hashnode article | 3-4 hrs | **Medium** | ✅ Do 1 |
+| Product Hunt launch | 2-3 hrs | **Medium** | ✅ Do |
+| Awesome Selfhosted PR | 15 min | **Medium** | ✅ Easy win |
+| Twitter/X account | 1 hr/week | **Low-Medium** | ⚠️ Optional |
+| YouTube / TikTok | 5+ hrs each | **Low** for code | ❌ Skip |
+| Paid ads | $$$ | **Low** for OSS | ❌ Skip |
 
-**Title options** (A/B test mentally):
-- `Show HN: Podcast Brain Pro – Open-source AI podcast factory, runs locally`
-- `Show HN: I built an open-source podcast generator that speaks 10 languages`
-- `Show HN: Turn any topic into a podcast – open source, local, zero cloud fees`
+---
 
-**Body template** (keep it under 200 words):
+## Week 1: Foundation (Do This First)
 
+### 1. README That Converts (2-3 hours)
+
+Your README is 80% of the battle. Most people star without ever running the code.
+
+**Top section (above the fold):**
+```
+# Podcast Brain Pro
+
+[![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/niranjannie/podcast-brain-pro/blob/main/LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Node 18+](https://img.shields.io/badge/node-18+-blue.svg)](https://nodejs.org/)
+
+> Turn any topic into a studio-quality podcast — locally, in any language, with AI.
+
+[🎧 Live Samples](https://frontend-chi-virid-53.vercel.app/landing) · [📖 Docs](https://github.com/niranjannie/podcast-brain-pro/blob/main/docs/SETUP.md) · [⭐ Star](https://github.com/niranjannie/podcast-brain-pro)
+
+[HERO GIF HERE — 10 seconds showing topic → script → audio]
+```
+
+**Must-include sections:**
+1. **One-line description** (what it does, who it's for)
+2. **30-second quickstart** — 3 copy-paste commands
+3. **Live audio samples link** — your landing page
+4. **Screenshot grid** — 3-4 images of UI + generated output
+5. **"Why I built this"** — 2-3 paragraphs (use your script)
+6. **Comparison** — vs ElevenLabs (paid/cloud) vs NotebookLM (no audio)
+7. **Features list** — bullet points, not paragraphs
+8. **Requirements** — Mac M1+ or NVIDIA GPU
+9. **Contributing** — link to CONTRIBUTING.md
+
+**Badges:** [shields.io](https://shields.io) — License, Python version, Node version, Build status
+
+### 2. Swap Landing Page (30 min)
+
+Replace `frontend/app/landing/page.tsx` with `page-conversion.tsx` content. It has:
+- Emotional hero ("Your ideas deserve to be heard")
+- Pain points section
+- Draggable audio samples
+- FAQ accordion
+- "Star on GitHub" CTAs everywhere
+
+### 3. One Dev.to Article (3-4 hours)
+
+Write ONE article: **"I Built an Open-Source Podcast Generator — Here's How"**
+
+Structure:
+- Hook: "I spent weekends recording podcasts. Now it takes 30 seconds."
+- The problem (your script, condensed)
+- The solution (architecture diagram)
+- Technical deep dive (TTS pipeline, script generation)
+- Live samples link
+- CTA: "Star the repo if you find it useful"
+
+Post to: Dev.to + cross-post to Hashnode
+
+---
+
+## Week 2: Launch
+
+### Day 1: Hacker News "Show HN"
+
+**Best time:** Tuesday or Thursday, 7–10 AM Pacific
+
+**Title:**
+```
+Show HN: Podcast Brain Pro – Open-source AI podcast factory, runs locally
+```
+
+**Body:**
 ```
 I spent weekends recording, re-recording, and editing podcasts. So I built Podcast Brain Pro — an open-source AI podcast factory that runs entirely on your machine.
 
@@ -58,195 +101,122 @@ What it does:
 • Type a topic → AI researches and writes a natural script
 • Choose format: monologue, interview, or panel discussion
 • Generate studio-quality audio locally (Apple Silicon / NVIDIA)
-• Supports English + 10 Indian languages
+• English + 10 Indian languages
 • Outputs WAV + RSS feed + metadata JSON
-• Zero cloud fees, zero subscriptions, fully MIT-licensed
+• Zero cloud fees, MIT licensed
 
-Tech stack: FastAPI + PyTorch (VibeVoice TTS) + Next.js + Sarvam AI for Indic languages.
+Tech: FastAPI + PyTorch (VibeVoice TTS) + Next.js + Sarvam AI for Indic languages.
 
 Live samples: https://frontend-chi-virid-53.vercel.app/landing
-Repo: https://github.com/niranjannie/podcast-brain-pro
+GitHub: https://github.com/niranjannie/podcast-brain-pro
 
-Would love feedback, especially on the audio quality and script generation. Happy to answer questions!
+Would love feedback on the audio quality. Happy to answer questions!
 ```
 
-**HN tips:**
-- Post the GitHub repo URL directly (not the landing page). HN trusts GitHub links more.
-- Add a first comment yourself explaining the motivation + inviting questions.
-- Reply to every comment within the first 2 hours. Engagement in the first hour determines ranking.
-- Don't ask friends to upvote. HN detects voting rings. Organic engagement only.
-
----
-
-### Reddit
-
-**Subreddits to target** (post to one every 3-4 days, not all at once):
-
-| Subreddit | Angle | Best Day/Time |
-|-----------|-------|---------------|
-| r/selfhosted | "Local AI podcast generator — no cloud, no subscriptions" | Weekend mornings |
-| r/opensource | "I open-sourced my podcast generator — 10 languages, local GPU" | Weekday afternoons |
-| r/MachineLearning | "Local TTS pipeline for multilingual podcasts — VibeVoice + Sarvam" | Weekday mornings |
-| r/LocalLLaMA | "Fully local podcast generation — scripts + audio on your machine" | Any time |
-| r/podcasting | "I built an AI tool that generates podcast episodes from a topic" | Weekday evenings |
-| r/india | "Open-source podcast generator that speaks Hindi, Kannada, and 8 more Indian languages" | Weekend mornings IST |
-| r/webdev | "Built a full-stack AI podcast factory — FastAPI + Next.js + local TTS" | Weekday afternoons |
-| r/SideProject | "Weekend project: AI podcast generator that runs on my MacBook" | Weekend |
-
-**Reddit post template** (adapt per subreddit):
-
+**Immediately after posting, add this comment:**
 ```
-[PROJECT] I built an open-source AI podcast generator that runs entirely on your machine
+A bit more context:
 
-For the past few months, I've been obsessed with a simple question: what if creating a podcast was as easy as typing a sentence?
+Audio synthesis is entirely local using VibeVoice (1.5B param PyTorch model, ~2GB). For Indian languages it uses Sarvam AI's Bulbul API.
 
-I spent entire weekends recording, editing, fixing mistakes. By the time one episode was done, I was exhausted. So I built **Podcast Brain Pro**.
+Script generation uses an LLM chain with Tavily web search — so "quantum computing" actually gets researched before scripting, not hallucinated.
 
-**What it does:**
-- Type any topic → AI writes a researched, natural script
-- Choose format: monologue, interview, or panel
-- Generate studio-quality audio locally on Apple Silicon / NVIDIA
-- English + 10 Indian languages (Hindi, Kannada, Tamil, etc.)
-- Zero cloud fees. Zero subscriptions. MIT licensed.
-
-**Live demo (hear samples):** https://frontend-chi-virid-53.vercel.app/landing
-**GitHub:** https://github.com/niranjannie/podcast-brain-pro
-
-The audio is generated using VibeVoice (local PyTorch) and Sarvam AI for Indic languages. Scripts are powered by open-source LLMs.
-
-Would love your thoughts — especially on the audio quality!
+The panel mode is my favorite. It generates 2-3 speakers with distinct personalities who interrupt and disagree. Setup takes ~10 min if you have Apple Silicon or NVIDIA.
 ```
 
-**Reddit rules:**
-- Read each subreddit's rules before posting
-- Don't post the same text to multiple subreddits simultaneously
-- Engage genuinely in comments — answer questions, don't just drop links
-- Cross-post only after the first post has traction (3+ days later)
+**Rules:**
+- Reply to every comment in first 2 hours
+- Don't ask friends to upvote (HN detects rings)
+- Be humble. HN hates hype.
+
+### Day 3: Reddit r/selfhosted
+
+**Title:** `[Showcase] Open-source AI podcast generator that runs entirely locally — no cloud, no subscriptions`
+
+**Body:** Use template from `docs/REDDIT_POSTS.md`
+
+### Day 5: Reddit r/opensource
+
+**Title:** `[Project] Podcast Brain Pro — open-source AI podcast generator, 10 languages, runs locally`
+
+**Body:** Use template from `docs/REDDIT_POSTS.md`
+
+### Day 7: Awesome Selfhosted PR
+
+Submit a PR to https://github.com/awesome-selfhosted/awesome-selfhosted
+
+This is an easy win — curated lists drive consistent long-term traffic.
 
 ---
 
-### Product Hunt
+## Week 3: Product Hunt
 
-**Launch checklist:**
-- [ ] Create a Product Hunt account
-- [ ] Prepare 3-5 GIFs/screenshots (600x400 or 1270x760)
-- [ ] Write a tagline: *"Turn any topic into a podcast — locally, in any language"*
-- [ ] Prepare maker comment: your personal story (use your script!)
-- [ ] Line up 5-10 people to upvote/comment in the first hour (friends, colleagues)
-- [ ] Launch on Tuesday at 12:01 AM PT (resets the daily leaderboard)
+**Why:** Product Hunt drives sustained traffic, not just a spike.
 
----
+**Prep:**
+- 3-5 screenshots (600x400 or 1270x760)
+- Tagline: "Turn any topic into a podcast — locally, in any language"
+- Maker comment: your personal story (2-3 paragraphs from your script)
 
-### Dev.to / Hashnode / Medium
-
-Write **3 articles** over 3 weeks:
-
-1. **"I Built an Open-Source Podcast Generator — Here's How"** — Technical deep dive. Walk through the architecture. Include code snippets. End with a CTA to star the repo.
-2. **"Generating Multilingual Podcasts with Local AI"** — Focus on the TTS pipeline, VibeVoice, Sarvam integration. Target r/MachineLearning and HN.
-3. **"From Idea to Podcast in 30 Seconds"** — Story-driven. Use your script as the backbone. Target general developer audience.
-
-**CTA at the end of every article:**
-> "If this sounds useful, give us a star on GitHub — it helps more than you know: [github.com/niranjannie/podcast-brain-pro](https://github.com/niranjannie/podcast-brain-pro)"
+**Launch day:**
+- Tuesday at 12:01 AM PT (resets daily leaderboard)
+- Ask 5-10 developer friends to upvote/comment in first hour
+- Reply to every comment
 
 ---
 
-## Phase 3: Ongoing Growth
+## Ongoing (1 hour/week)
 
-### Twitter/X Strategy
+### Twitter/X (Optional)
 
-**Content mix (3-4 tweets/week):**
-- **Demo videos** — Screen recording of "type topic → generate podcast" (15-30 seconds)
-- **Before/after** — "What used to take 6 hours, now takes 30 seconds"
-- **Language showcases** — "Here's a podcast in Kannada, generated from one sentence"
-- **Behind the scenes** — "How VibeVoice TTS works under the hood"
-- **User testimonials** — Even if it's just friends using it
+If you want to do social, keep it minimal:
+- 2-3 tweets/week
+- Mix: demo GIFs, language showcases, "how it works" threads
+- Hashtags: #OpenSource #BuildInPublic #AI #IndicLanguages
 
-**Pinned tweet:** Your best demo video + GitHub link
+### Engage in Communities
 
-**Hashtags:** #OpenSource #AI #Podcast #TextToSpeech #IndicLanguages #BuildInPublic
+Spend 30 min/week in:
+- HN comment sections on AI/audio posts (add value, then mention your project if relevant)
+- r/MachineLearning, r/LocalLLaMA (help first, share second)
+- Dev.to (comment on related articles)
 
-### YouTube / TikTok
-
-**Video ideas:**
-- "I generated a podcast in 30 seconds using AI (completely free)"
-- "This open-source tool generates podcasts in 10 languages"
-- "From text to podcast: a full tutorial"
-- Shorts: Side-by-side "Manual podcast creation vs AI podcast creation"
-
-### Newsletters & Communities
-
-Submit to:
-- [Python Weekly](https://pythonweekly.com)
-- [JavaScript Weekly](https://javascriptweekly.com)
-- [Hacker Newsletter](https://hackernewsletter.com)
-- [AI Engineer](https://ai.engineer)
-- [Indie Hackers](https://indiehackers.com)
-- [Awesome Selfhosted](https://github.com/awesome-selfhosted/awesome-selfhosted) — PR your project
-
-### Discord / Slack Communities
-
-Join and contribute first, then share:
-- MLOps Community Discord
-- Latent Space Discord
-- AI Engineer Discord
-- LocalLLaMA Discord
-- Indian tech communities (IndiDev, etc.)
-
-**Rule: Help 10 times before you share once.**
+**Rule:** Help 5 times, promote 1 time.
 
 ---
 
-## Phase 4: Retention & Loop
+## Milestones to Celebrate
 
-### GitHub Star Retargeting
-
-Once you hit 50+ stars:
-1. Use [GitHub Star Search](https://github.com/search) to find who starred similar projects
-2. Look at repos your stargazers also starred — those are your next targets
-3. Reach out to active contributors with personalized messages
-
-### Milestone Marketing
-
-Celebrate every milestone publicly:
-- 100 stars → Twitter thread + Reddit update post
-- 500 stars → Blog post: "What I learned from 500 stars"
-- 1000 stars → Giveaway, merch, or feature announcement
-
-### Public Roadmap
-
-Create a GitHub Project board with:
-- Upcoming features (Docker support, more languages, web UI improvements)
-- "Good first issue" items for new contributors
-- Community-requested features
+| Stars | Action |
+|-------|--------|
+| 50 | Tweet about it |
+| 100 | Reddit "update" post + blog reflection |
+| 250 | HN "What I learned" post |
+| 500 | Product Hunt re-launch with new features |
+| 1000 | Community giveaway or merch |
 
 ---
 
-## Quick-Start Action Plan (This Week)
+## What NOT to Do
 
-| Day | Action |
-|-----|--------|
-| **Today** | Polish README with hero GIF + badges + quickstart |
-| **Day 2** | Post to r/selfhosted |
-| **Day 3** | Write Dev.to article #1 |
-| **Day 4** | Post "Show HN" (Tuesday–Thursday, 7–10 AM PT) |
-| **Day 5** | Post to r/opensource |
-| **Day 6** | Create Twitter account, pin demo video tweet |
-| **Day 7** | Post to r/LocalLLaMA + engage in all comment threads |
+❌ Don't spam every subreddit at once — space posts 2-3 days apart  
+❌ Don't buy stars or use star-exchange sites — GitHub detects this  
+❌ Don't ignore issues/PRs — responsiveness is the #1 factor in retention  
+❌ Don't launch on holidays or during major tech events  
+❌ Don't make a video — for code projects, written content converts better
 
 ---
 
-## Assets Checklist
+## Quick Checklist
 
-- [ ] Hero GIF (10-15s, showing topic → script → audio)
-- [ ] Screenshots (Settings, Script preview, Audio player, RSS feed)
-- [ ] Demo video (60-90s, with your voiceover script)
-- [ ] Logo/avatar (consistent across GitHub, Twitter, Product Hunt)
-- [ ] One-liner/tagline
-- [ ] FAQ (5-7 questions)
-- [ ] Contributing guide
-- [ ] Code of Conduct
-- [ ] Issue templates (bug report, feature request)
+- [ ] README has hero GIF + badges + 30-sec quickstart
+- [ ] Landing page swapped to conversion version
+- [ ] One Dev.to article published
+- [ ] HN "Show HN" posted (Tue/Thu morning PT)
+- [ ] 2 Reddit posts (r/selfhosted, r/opensource)
+- [ ] Awesome Selfhosted PR submitted
+- [ ] Product Hunt launched
 
 ---
 
-*Last updated: April 2026*
+*Realistic timeline: 3 weeks to 100+ stars if you execute consistently.*
