@@ -1,0 +1,98 @@
+<svg viewBox="0 0 900 600" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <path d="M0,0 L9,3.5 L0,7 Z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <rect width="900" height="600" fill="#0f172a"/>
+
+  <!-- Title -->
+  <text x="450" y="32" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="18" font-weight="700" fill="#f8fafc" letter-spacing="0.5">Podcast Brain Pro Architecture</text>
+
+  <!-- FRONTEND -->
+  <rect x="340" y="55" width="220" height="64" rx="14" fill="#1e293b" stroke="#3b82f6" stroke-width="1.5"/>
+  <path d="M362,78 h16 v10 h-6 l-2,4 h-2 l-2,-4 h-4 Z" fill="none" stroke="#60a5fa" stroke-width="1.5" stroke-linejoin="round"/>
+  <rect x="364" y="80" width="12" height="6" fill="none" stroke="#60a5fa" stroke-width="1.5"/>
+  <text x="450" y="82" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#bfdbfe">React / Next.js Frontend</text>
+  <text x="450" y="100" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#94a3b8">localhost:3000</text>
+
+  <!-- Arrow: Frontend → Backend -->
+  <line x1="450" y1="119" x2="450" y2="148" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- BACKEND -->
+  <rect x="340" y="155" width="220" height="64" rx="14" fill="#1e293b" stroke="#8b5cf6" stroke-width="1.5"/>
+  <rect x="360" y="172" width="18" height="14" rx="2" fill="none" stroke="#a78bfa" stroke-width="1.5"/>
+  <circle cx="365" cy="179" r="1.2" fill="#a78bfa"/>
+  <circle cx="369" cy="179" r="1.2" fill="#a78bfa"/>
+  <line x1="360" y1="176" x2="378" y2="176" stroke="#a78bfa" stroke-width="1"/>
+  <text x="450" y="182" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#ddd6fe">FastAPI Backend</text>
+  <text x="450" y="200" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#94a3b8">Python · port 8000</text>
+
+  <!-- Branch lines from Backend to 3 services -->
+  <polyline points="450,219 450,245 130,245 130,278" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="450" y1="245" x2="450" y2="278" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <polyline points="450,245 770,245 770,278" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- SCRIPT GENERATION -->
+  <rect x="20" y="285" width="220" height="80" rx="14" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5"/>
+  <rect x="42" y="302" width="12" height="16" rx="1.5" fill="none" stroke="#fbbf24" stroke-width="1.5"/>
+  <line x1="45" y1="307" x2="51" y2="307" stroke="#fbbf24" stroke-width="1"/>
+  <line x1="45" y1="311" x2="51" y2="311" stroke="#fbbf24" stroke-width="1"/>
+  <line x1="45" y1="315" x2="49" y2="315" stroke="#fbbf24" stroke-width="1"/>
+  <text x="130" y="312" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#fde68a">Script Generation</text>
+  <text x="130" y="330" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#e2e8f0">Dialogram → GitHub → Groq</text>
+  <text x="130" y="345" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#94a3b8">Cloud LLMs</text>
+
+  <!-- TTS ENGINES -->
+  <rect x="340" y="285" width="220" height="80" rx="14" fill="#1e293b" stroke="#10b981" stroke-width="1.5"/>
+  <path d="M366,300 l-5,4 h-3 v12 h3 l5,4 Z" fill="none" stroke="#34d399" stroke-width="1.5" stroke-linejoin="round"/>
+  <path d="M371,302 q4,6 0,12" fill="none" stroke="#34d399" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M375,298 q7,10 0,20" fill="none" stroke="#34d399" stroke-width="1.5" stroke-linecap="round"/>
+  <text x="450" y="312" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#a7f3d0">TTS Engines</text>
+  <text x="450" y="330" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#e2e8f0">Realtime 0.5B · Longform 1.5B</text>
+  <text x="450" y="345" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#94a3b8">Local GPU</text>
+
+  <!-- SARVAM AI -->
+  <rect x="660" y="285" width="220" height="80" rx="14" fill="#1e293b" stroke="#d97706" stroke-width="1.5"/>
+  <circle cx="682" cy="310" r="9" fill="none" stroke="#fbbf24" stroke-width="1.5"/>
+  <ellipse cx="682" cy="310" rx="4" ry="9" fill="none" stroke="#fbbf24" stroke-width="1"/>
+  <line x1="673" y1="310" x2="691" y2="310" stroke="#fbbf24" stroke-width="1"/>
+  <text x="770" y="312" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#fde68a">Sarvam AI</text>
+  <text x="770" y="330" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#e2e8f0">Cloud TTS for Indian Languages</text>
+  <text x="770" y="345" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#94a3b8">Bulbul · Indic Support</text>
+
+  <!-- Converging arrows from 3 services to Output -->
+  <polyline points="130,365 130,390 450,390 450,418" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="450" y1="365" x2="450" y2="418" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <polyline points="770,365 770,390 450,390" fill="none" stroke="#475569" stroke-width="1.5"/>
+
+  <!-- OUTPUTS -->
+  <rect x="340" y="425" width="220" height="64" rx="14" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>
+  <path d="M360,445 h14 a3,3 0 0 1 3,3 v12 a3,3 0 0 1 -3,3 h-14 a3,3 0 0 1 -3,-3 v-12 a3,3 0 0 1 3,-3 Z" fill="none" stroke="#94a3b8" stroke-width="1.5"/>
+  <line x1="363" y1="451" x2="371" y2="451" stroke="#94a3b8" stroke-width="1"/>
+  <line x1="363" y1="455" x2="369" y2="455" stroke="#94a3b8" stroke-width="1"/>
+  <text x="450" y="452" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#e2e8f0">outputs/ Folder</text>
+  <text x="450" y="470" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#94a3b8">WAV · JSON · RSS Feed</text>
+
+  <!-- LEGEND -->
+  <rect x="155" y="530" width="590" height="38" rx="10" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  
+  <circle cx="185" cy="549" r="5" fill="#3b82f6"/>
+  <text x="198" y="553" font-family="system-ui, sans-serif" font-size="11" fill="#cbd5e1">Frontend</text>
+  
+  <circle cx="275" cy="549" r="5" fill="#8b5cf6"/>
+  <text x="288" y="553" font-family="system-ui, sans-serif" font-size="11" fill="#cbd5e1">Backend</text>
+  
+  <circle cx="365" cy="549" r="5" fill="#f59e0b"/>
+  <text x="378" y="553" font-family="system-ui, sans-serif" font-size="11" fill="#cbd5e1">Cloud</text>
+  
+  <circle cx="445" cy="549" r="5" fill="#10b981"/>
+  <text x="458" y="553" font-family="system-ui, sans-serif" font-size="11" fill="#cbd5e1">Local GPU</text>
+  
+  <circle cx="545" cy="549" r="5" fill="#64748b"/>
+  <text x="558" y="553" font-family="system-ui, sans-serif" font-size="11" fill="#cbd5e1">Storage</text>
+
+  <!-- Footer note -->
+  <text x="450" y="590" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#475569">Cloud script generation · Local GPU audio synthesis</text>
+</svg>

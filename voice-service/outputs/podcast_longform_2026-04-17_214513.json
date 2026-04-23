@@ -1,0 +1,15 @@
+{
+  "created_at": "2026-04-17T21:45:13.040776",
+  "duration_seconds": 218.93,
+  "word_count": 572,
+  "voice_names": [
+    "Host",
+    "Dr. Chen",
+    "Sarah"
+  ],
+  "format": "panel",
+  "language": "en",
+  "chunks": 1,
+  "device": "mps",
+  "topic": "AI Future Panel Chunked Test"
+}

@@ -1,0 +1,13 @@
+# Next.js
+.next/
+out/
+*.tsbuildinfo
+
+# Vercel
+.vercel
+
+# Env files
+.env*.local
+
+# macOS
+.DS_Store

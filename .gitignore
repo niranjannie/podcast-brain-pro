@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+*.egg-info/
+dist/
+build/
+
+# User secrets
+.env
+.env.local
+user_config.json
+*.key
+
+# Outputs & logs
+*.log
+*.pid
+*.mp3
+*.mp4
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node (if any frontend tooling)
+node_modules/
+.next/
+dist/
+
+# Private planning docs (contain personal paths)
+00-README.md
+01-*.md
+02-*.md
+03-*.md
+04-*.md
+05-*.md
+
+# Playwright MCP session data
+.playwright-mcp/
+voice-service/outputs/archive/**
