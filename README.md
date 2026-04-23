@@ -106,6 +106,24 @@ Hear real episodes generated from a single sentence — zero editing:
 
 ---
 
+## 🖼️ Screenshots
+
+### Landing Page
+![Landing Page](docs/screenshots/landing-hero.png)
+
+### App Interface
+![App Main](docs/screenshots/app-main.png)
+
+### Settings Modal
+![App Settings](docs/screenshots/app-settings.png)
+
+### Help & Setup Guide
+![App Help](docs/screenshots/app-help.png)
+
+See [`docs/screenshots/`](./docs/screenshots/) for full resolution images.
+
+---
+
 ## 📦 Model Downloads (Automatic)
 
 On first audio generation, models download automatically from HuggingFace:
