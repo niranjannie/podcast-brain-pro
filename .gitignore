@@ -55,3 +55,8 @@ dist/
 # Playwright MCP session data
 .playwright-mcp/
 voice-service/outputs/archive/**
+
+# Personal marketing materials (not for repo)
+MARKETING.md
+docs/REDDIT_POSTS.md
+docs/HACKER_NEWS_POST.md
