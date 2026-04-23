@@ -589,6 +589,27 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* Prominent Static Preview Banner */}
+      <section className="max-w-4xl mx-auto px-4 sm:px-6 -mt-8 mb-8">
+        <div className="rounded-xl border border-accent/20 bg-accent/5 p-5 flex flex-col sm:flex-row items-start sm:items-center gap-4">
+          <div className="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center text-accent shrink-0">
+            <Download className="w-5 h-5" />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-medium text-foreground">
+              This page is a static preview with audio samples.
+            </p>
+            <p className="text-xs text-muted mt-1">
+              The full app with podcast generation runs at <code className="text-accent">localhost:3000</code> after you clone the repo and set it up locally. It takes about 10 minutes.
+            </p>
+          </div>
+          <a href="https://github.com/niranjannie/podcast-brain-pro" target="_blank" className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent text-slate-900 text-sm font-semibold hover:brightness-110 transition-all shrink-0">
+            <Github className="w-4 h-4" />
+            Clone & Setup
+          </a>
+        </div>
+      </section>
+
       {/* Pain Points */}
       <section className="py-16 sm:py-20 bg-white/[0.02]">
         <div className="max-w-4xl mx-auto px-4 sm:px-6">
@@ -640,6 +661,105 @@ export default function LandingPage() {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      </section>
+
+      {/* App Preview — Actual localhost:3000 UI */}
+      <section className="py-16 sm:py-20 bg-white/[0.02]">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6">
+          <div className="text-center mb-10">
+            <div className="text-xs font-semibold text-accent uppercase tracking-wider mb-2">App Preview</div>
+            <h2 className="text-2xl sm:text-3xl font-bold mb-3">What You Get After Setup</h2>
+            <p className="text-muted">This is the actual interface that runs at <code className="text-accent">localhost:3000</code> once you install locally.</p>
+          </div>
+          <div className="grid md:grid-cols-2 gap-5">
+            <div className="rounded-xl border border-white/5 bg-white/[0.03] overflow-hidden">
+              <img src="/screenshots/app-main.png" alt="Main app interface with episode configuration" className="w-full" />
+              <div className="p-4">
+                <div className="text-sm font-semibold">Episode Configuration</div>
+                <div className="text-xs text-muted mt-1">Enter a topic, choose format, pick language, and generate.</div>
+              </div>
+            </div>
+            <div className="rounded-xl border border-white/5 bg-white/[0.03] overflow-hidden">
+              <img src="/screenshots/app-settings.png" alt="Settings modal with API key configuration" className="w-full" />
+              <div className="p-4">
+                <div className="text-sm font-semibold">Settings & API Keys</div>
+                <div className="text-xs text-muted mt-1">Configure LLM providers and TTS engines. Saved locally.</div>
+              </div>
+            </div>
+            <div className="rounded-xl border border-white/5 bg-white/[0.03] overflow-hidden">
+              <img src="/screenshots/app-help.png" alt="Help modal with setup guide" className="w-full" />
+              <div className="p-4">
+                <div className="text-sm font-semibold">Built-in Setup Guide</div>
+                <div className="text-xs text-muted mt-1">Step-by-step help right inside the app.</div>
+              </div>
+            </div>
+            <div className="rounded-xl border border-white/5 bg-white/[0.03] overflow-hidden">
+              <img src="/screenshots/app-fullpage.png" alt="Full app page showing system status and all controls" className="w-full" />
+              <div className="p-4">
+                <div className="text-sm font-semibold">System Status & Controls</div>
+                <div className="text-xs text-muted mt-1">Monitor model cache, choose voice cast, and track generation.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Architecture */}
+      <section className="py-16 sm:py-20">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6">
+          <div className="text-center mb-10">
+            <div className="text-xs font-semibold text-accent uppercase tracking-wider mb-2">Architecture</div>
+            <h2 className="text-2xl sm:text-3xl font-bold mb-3">How It Works Under the Hood</h2>
+            <p className="text-muted">Fully open source. Every layer is yours to inspect and modify.</p>
+          </div>
+          <div className="rounded-xl border border-white/5 bg-white/[0.03] p-6 sm:p-8">
+            <img src="/architecture.svg" alt="System architecture diagram" className="w-full max-w-2xl mx-auto" />
+            <div className="mt-8 grid sm:grid-cols-2 gap-4 text-sm">
+              <div className="flex items-start gap-3">
+                <div className="w-2 h-2 rounded-full bg-blue-500 mt-1.5 shrink-0" />
+                <div>
+                  <span className="font-medium text-foreground">React Frontend</span>
+                  <span className="text-muted"> — Next.js 14 + Tailwind CSS</span>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="w-2 h-2 rounded-full bg-purple-500 mt-1.5 shrink-0" />
+                <div>
+                  <span className="font-medium text-foreground">FastAPI Backend</span>
+                  <span className="text-muted"> — Python, async endpoints</span>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="w-2 h-2 rounded-full bg-amber-500 mt-1.5 shrink-0" />
+                <div>
+                  <span className="font-medium text-foreground">Script Generation</span>
+                  <span className="text-muted"> — LLM chain + Tavily web search</span>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="w-2 h-2 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
+                <div>
+                  <span className="font-medium text-foreground">Local TTS</span>
+                  <span className="text-muted"> — VibeVoice 1.5B (PyTorch)</span>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="w-2 h-2 rounded-full bg-orange-500 mt-1.5 shrink-0" />
+                <div>
+                  <span className="font-medium text-foreground">Indic TTS</span>
+                  <span className="text-muted"> — Sarvam AI Bulbul API</span>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="w-2 h-2 rounded-full bg-gray-500 mt-1.5 shrink-0" />
+                <div>
+                  <span className="font-medium text-foreground">Output</span>
+                  <span className="text-muted"> — WAV + JSON + RSS feed</span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
