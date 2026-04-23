@@ -1,86 +1,114 @@
 # 🎙️ Podcast Brain Pro
 
-> Open-source AI podcast factory. Generate research-backed scripts instantly. Synthesize multi-speaker audio locally on your Apple Silicon Mac or NVIDIA GPU.
+> Turn any topic into a studio-quality podcast — locally, in any language, with AI.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Node 18+](https://img.shields.io/badge/node-18+-blue.svg)](https://nodejs.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)]()
 [![Next.js](https://img.shields.io/badge/Next.js-000?logo=next.js&logoColor=white)]()
+
+[🎧 **Live Samples**](https://frontend-chi-virid-53.vercel.app/landing) · [📖 **Docs**](./docs/SETUP.md) · [⭐ **Star on GitHub**](https://github.com/niranjannie/podcast-brain-pro)
+
+---
+
+## Why I Built This
+
+I spent entire weekends trying to create just one short podcast. Writing scripts. Recording again and again. Fixing mistakes. Editing endlessly.
+
+By the time it was done, I was already exhausted.
+
+**What if creating a podcast was as simple as typing a sentence?**
+
+That's Podcast Brain Pro. An open-source AI podcast factory that runs entirely on your own machine. No studio. No cloud dependency. No subscriptions.
+
+Type a topic. Get a researched, natural script. Choose monologue, interview, or panel. Generate studio-quality audio locally. In English or 10 Indian languages.
+
+Your ideas deserve to be heard.
 
 ---
 
 ## ✨ What It Does
 
-1. **Enter a topic** — "The future of quantum computing"
-2. **Choose format** — Solo monologue, two-person interview, or three-person panel
-3. **Pick language** — English or 10 Indian languages (Hindi, Tamil, Telugu, Kannada, Bengali, Marathi, Gujarati, Malayalam, Punjabi, Odia)
-4. **Generate script** — AI researches and writes a natural, conversational script (~10–30s)
-5. **Generate audio** — Local VibeVoice TTS turns it into studio-quality podcast audio
+| Step | What Happens | Time |
+|------|-------------|------|
+| 1. Enter a topic | AI researches via web search and writes a natural script | ~10–30s |
+| 2. Choose format | Monologue, two-person interview, or three-person panel | Instant |
+| 3. Pick language | English or 10 Indian languages | Instant |
+| 4. Generate audio | Local VibeVoice TTS synthesizes human-sounding speech | 30s–15min |
+| 5. Export | WAV + RSS feed + JSON metadata | Instant |
+
+**Languages:** English, Hindi, Kannada, Tamil, Telugu, Marathi, Bengali, Gujarati, Malayalam, Punjabi, Assamese
+
+**Output formats:** Solo monologue · Two-person interview · Three-person panel discussion
 
 ---
 
-## 🚀 Quick Start (Local Setup)
+## 🚀 Quick Start
 
-### Prerequisites
-- **macOS** with Apple Silicon (M1/M2/M3/M4) or **Linux/Windows** with NVIDIA GPU
-- **Python 3.10+**
-- **Node.js 18+**
-- **~15 GB free disk space** for model downloads
-- **Git**
-
-### 1. Clone the repo
+> **Prerequisites:** macOS Apple Silicon (M1–M4) or Linux/Windows + NVIDIA GPU · Python 3.10+ · Node.js 18+ · ~15 GB disk space
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/podcast-brain-pro.git
+# 1. Clone
+git clone https://github.com/niranjannie/podcast-brain-pro.git
 cd podcast-brain-pro
-```
 
-### 2. Install backend
-
-```bash
+# 2. Install backend
 cd voice-service
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+cd ../vibevoice-src && pip install -e . && cd ../voice-service
 
-# Install the vibevoice package (required, not on PyPI)
-cd ../vibevoice-src
-pip install -e .
-cd ../voice-service
-```
-
-### 3. Configure API keys
-
-```bash
+# 3. Configure keys
 cp .env.example .env
-# Edit .env and add at least one LLM provider key:
-# - DIALOGRAM_API_KEY (recommended, free tier)
-# - GITHUB_TOKEN (GitHub Models, free GPT-4o)
-# - GROQ_API_KEY (optional fallback)
-```
+# Add at least one LLM key (Dialogram recommended — free tier)
 
-### 4. Start the backend
-
-```bash
+# 4. Start backend
 source .venv/bin/activate
-uvicorn main:app --host 0.0.0.0 --port 8766
+uvicorn main:app --host 0.0.0.0 --port 8000
+
+# 5. Start frontend (new terminal)
+cd ../frontend && npm install && npm run dev
+# Open http://localhost:3000
 ```
 
-### 5. Start the frontend (new terminal)
+Full setup guide: [`docs/SETUP.md`](./docs/SETUP.md)
 
-```bash
-cd podcast-brain-pro/frontend
-npm install
-npm run dev
-```
+---
 
-Open **http://localhost:3000**
+## 🆚 How It Compares
+
+| Feature | Podcast Brain Pro | ElevenLabs | NotebookLM |
+|---------|------------------|------------|------------|
+| **Cost** | Free (MIT) | ~$0.30/min | Free (Google) |
+| **Runs locally** | ✅ Yes | ❌ Cloud only | ❌ Cloud only |
+| **Indian languages** | ✅ 10 languages | ⚠️ Limited | ❌ No |
+| **Interview/Panel** | ✅ Natural dialogue | ⚠️ Single voice | ⚠️ Summary only |
+| **RSS feed export** | ✅ Built-in | ❌ No | ❌ No |
+| **Open source** | ✅ Full code | ❌ Proprietary | ❌ Proprietary |
+| **Data privacy** | ✅ 100% local | ❌ Sent to cloud | ❌ Sent to Google |
+
+---
+
+## 🎧 Live Samples
+
+Hear real episodes generated from a single sentence — zero editing:
+
+🔗 **[https://frontend-chi-virid-53.vercel.app/landing](https://frontend-chi-virid-53.vercel.app/landing)**
+
+| Sample | Language | Format | Length |
+|--------|----------|--------|--------|
+| AI Future Discussion | 🇺🇸 English | Interview | 5:12 |
+| Technology Trends Panel | 🇺🇸 English | Panel | 3:42 |
+| Nation Building: India vs China | 🇮🇳 Hindi | Interview | 4:49 |
+| Delhi Air Pollution & Government | 🇮🇳 Hindi | Panel | 4:04 |
+| Bangalore News Update | 🇮🇳 Kannada | Interview | 3:04 |
 
 ---
 
 ## 📦 Model Downloads (Automatic)
 
-On the first audio generation, VibeVoice models download automatically from HuggingFace:
+On first audio generation, models download automatically from HuggingFace:
 
 | Model | Size | Time | Use Case |
 |-------|------|------|----------|
@@ -88,24 +116,33 @@ On the first audio generation, VibeVoice models download automatically from Hugg
 | VibeVoice Longform 1.5B | ~5.4 GB | ~5–10 min | Multi-speaker / >10 min |
 | VibeVoice ASR 7B | ~14 GB | ~10–15 min | Speech-to-text (optional) |
 
-**Cache location:** `~/.cache/huggingface/hub/`
+**Cache:** `~/.cache/huggingface/hub/`
 
 ---
 
-## 🏗️ Project Structure
+## 🏗️ Architecture
+
+```
+Topic → Web Research → LLM Script → TTS Engine → Audio + RSS
+```
+
+**Stack:**
+- **Frontend:** Next.js 14 + React + Tailwind CSS
+- **Backend:** FastAPI (Python)
+- **Script generation:** LLM chain with Tavily web search
+- **English TTS:** VibeVoice 1.5B (local PyTorch)
+- **Indic TTS:** Sarvam AI Bulbul API
+- **Output:** WAV + JSON metadata + RSS feed
 
 ```
 podcast-brain-pro/
-├── frontend/              # Next.js 14 + React + Tailwind CSS
-│   ├── app/page.tsx       # Main UI
-│   └── components/ui/     # Buttons, cards, modals, badges
+├── frontend/              # Next.js 14 + React + Tailwind
 ├── voice-service/         # FastAPI backend
 │   ├── main.py            # API endpoints, TTS, LLM fallbacks
 │   ├── rss_generator.py   # RSS feed generator
-│   ├── requirements.txt   # Python dependencies
 │   ├── start.sh           # Startup script
 │   └── .env.example       # API key template
-├── vibevoice-src/         # Microsoft VibeVoice package (install with pip -e)
+├── vibevoice-src/         # Microsoft VibeVoice (pip install -e)
 └── docs/                  # Setup, architecture, API keys, contributing
 ```
 
@@ -115,50 +152,49 @@ podcast-brain-pro/
 
 Podcast Brain Pro uses a **fallback chain** of free-tier LLM providers.
 
-**Recommended primary:** [Dialogram](https://dialogram.me/) (`qwen-3.6-plus`) — free tier available
+**Recommended:** [Dialogram](https://dialogram.me/) (`qwen-3.6-plus`) — free tier
 
 **Free fallbacks:** GitHub Models (`gpt-4o`), Groq, Cerebras, Gemini, Mistral, NVIDIA, Together AI, OpenRouter
 
-**For Indian languages:** [Sarvam AI](https://www.sarvam.ai/) — free tier for TTS
+**Indic languages:** [Sarvam AI](https://www.sarvam.ai/) — free tier for TTS
 
-Keys are saved locally in `voice-service/user_config.json`.
+Keys saved locally in `voice-service/user_config.json`. Never sent to our servers.
+
+Details: [`docs/API_KEYS.md`](./docs/API_KEYS.md)
 
 ---
 
-## ⚡ Audio Engine Speeds
+## ⚡ Audio Engine Speeds (M4 Mac)
 
-| Engine | Format | Language | Speed on M4 Mac |
-|--------|--------|----------|-----------------|
+| Engine | Format | Language | Speed |
+|--------|--------|----------|-------|
 | **Realtime 0.5B** | Monologue ≤10 min | English | ~30–90s |
 | **Longform 1.5B** | Interview / Panel / >10 min | English | ~5–15 min |
 | **Sarvam Bulbul v3** | Any | Indian languages | ~30–90s |
 
 ---
 
-## 🖼️ Screenshots
-
-See `docs/screenshots/` for UI screenshots.
-
----
-
 ## 🤝 Contributing
 
-We welcome contributions! Priority areas:
-- CUDA support for NVIDIA GPUs
-- Faster multi-speaker TTS stitching
-- Additional language support
-- UI/UX improvements
+We welcome contributions!
+
+- [`good first issue`](../../labels/good%20first%20issue) — easy entry points
+- [`help wanted`](../../labels/help%20wanted) — bigger features needing hands
+
+Priority areas: CUDA support · Faster multi-speaker stitching · More languages · UI/UX
+
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) and [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 
 ---
 
 ## 📄 License
 
-[MIT License](./LICENSE)
+[MIT License](./LICENSE) — free to use, modify, and commercialize.
 
 ---
 
 ## 🙏 Acknowledgments
 
 - [Microsoft VibeVoice](https://github.com/microsoft/vibevoice) for the TTS models
-- [Dialogram](https://dialogram.me/) for the Qwen 3.6 API
+- [Dialogram](https://dialogram.me/) for the Qwen API
 - [FastAPI](https://fastapi.tiangolo.com/) and [Next.js](https://nextjs.org/) for the stack
