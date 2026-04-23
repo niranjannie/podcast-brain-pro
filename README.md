@@ -10,6 +10,8 @@
 
 [🎧 **Live Samples**](https://frontend-chi-virid-53.vercel.app/landing) · [📖 **Docs**](./docs/SETUP.md) · [⭐ **Star on GitHub**](https://github.com/niranjannie/podcast-brain-pro)
 
+> **Note:** The [live samples page](https://frontend-chi-virid-53.vercel.app/landing) is a static demo with playable audio — for sharing and preview. The actual app runs at `localhost:3000` after local installation.
+
 ---
 
 ## Why I Built This
@@ -86,11 +88,13 @@ Full setup guide: [`docs/SETUP.md`](./docs/SETUP.md)
 
 ---
 
-## 🎧 Live Samples
+## 🎧 Live Samples (Static Demo)
 
 Hear real episodes generated from a single sentence — zero editing:
 
 🔗 **[https://frontend-chi-virid-53.vercel.app/landing](https://frontend-chi-virid-53.vercel.app/landing)**
+
+> This is a static preview page for sharing on social media. The full interactive app with generation capabilities runs locally at `localhost:3000` after setup.
 
 | Sample | Language | Format | Length |
 |--------|----------|--------|--------|
@@ -104,10 +108,10 @@ Hear real episodes generated from a single sentence — zero editing:
 
 ## 🖼️ Screenshots
 
-### Landing Page
+### Static Demo Page (for sharing)
 ![Landing Page](docs/screenshots/landing-hero.png)
 
-### App Interface
+### Actual App Interface (runs at `localhost:3000`)
 ![App Main](docs/screenshots/app-main.png)
 
 ### Settings Modal
