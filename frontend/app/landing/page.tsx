@@ -304,7 +304,7 @@ function AudioPlayer({ src, title, subtitle, showWave = false }: { src: string; 
   );
 }
 
-function MiniPlayer({ src, title, lang, flag, duration, format, model }: any) {
+function MiniPlayer({ file, title, lang, flag, duration, format, model }: any) {
   const [playing, setPlaying] = useState(false);
   const [loading, setLoading] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -368,7 +368,7 @@ function MiniPlayer({ src, title, lang, flag, duration, format, model }: any) {
         </div>
       </div>
       <div className="text-xs text-muted font-mono shrink-0">{duration}</div>
-      <audio ref={audioRef} src={src} preload="metadata" />
+      <audio ref={audioRef} src={file} preload="metadata" />
     </div>
   );
 }
