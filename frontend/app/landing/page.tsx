@@ -304,10 +304,15 @@ function AudioPlayer({ src, title, subtitle, showWave = false }: { src: string; 
   );
 }
 
-function MiniPlayer({ file, title, lang, flag, duration, format, model }: any) {
+function MiniPlayer({ file, title, lang, flag, duration: staticDuration, format, model }: any) {
   const [playing, setPlaying] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [dragging, setDragging] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
 
   const toggle = async () => {
     if (!audioRef.current) return;
@@ -332,42 +337,105 @@ function MiniPlayer({ file, title, lang, flag, duration, format, model }: any) {
     const onEnd = () => setPlaying(false);
     const onPause = () => setPlaying(false);
     const onPlay = () => { setPlaying(true); setLoading(false); };
+    const onLoaded = () => setDuration(audio.duration || 0);
+    const onTime = () => {
+      if (!dragging) {
+        setCurrentTime(audio.currentTime);
+        setProgress(audio.duration ? (audio.currentTime / audio.duration) * 100 : 0);
+      }
+    };
+    if (audio.readyState >= 1) setDuration(audio.duration || 0);
     audio.addEventListener("ended", onEnd);
     audio.addEventListener("pause", onPause);
     audio.addEventListener("play", onPlay);
+    audio.addEventListener("loadedmetadata", onLoaded);
+    audio.addEventListener("timeupdate", onTime);
     return () => {
       audio.removeEventListener("ended", onEnd);
       audio.removeEventListener("pause", onPause);
       audio.removeEventListener("play", onPlay);
+      audio.removeEventListener("loadedmetadata", onLoaded);
+      audio.removeEventListener("timeupdate", onTime);
     };
-  }, []);
+  }, [dragging]);
+
+  const calcSeek = (clientX: number) => {
+    const bar = barRef.current;
+    if (!bar || !duration) return null;
+    const rect = bar.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    return pct * duration;
+  };
+
+  const seekTo = (clientX: number) => {
+    const time = calcSeek(clientX);
+    if (time === null || !audioRef.current) return;
+    audioRef.current.currentTime = time;
+    setCurrentTime(time);
+    setProgress((time / duration) * 100);
+  };
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    setDragging(true);
+    seekTo(e.clientX);
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!dragging) return;
+    seekTo(e.clientX);
+  };
+
+  useEffect(() => {
+    if (!dragging) return;
+    const up = () => setDragging(false);
+    window.addEventListener("mouseup", up);
+    return () => window.removeEventListener("mouseup", up);
+  }, [dragging]);
 
   return (
-    <div className="rounded-xl border border-border bg-surface-2 p-4 flex items-center gap-4 hover:border-accent/30 transition-colors">
-      <button
-        onClick={toggle}
-        disabled={loading}
-        className="w-10 h-10 rounded-full bg-accent/10 flex items-center justify-center text-accent hover:bg-accent hover:text-slate-900 transition-all shrink-0 disabled:opacity-50"
-      >
-        {loading ? (
-          <div className="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-        ) : playing ? (
-          <Pause className="w-4 h-4" />
-        ) : (
-          <Play className="w-4 h-4 ml-0.5" />
-        )}
-      </button>
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium truncate">{title}</div>
-        <div className="text-xs text-muted flex items-center gap-2 mt-0.5">
-          <span>{flag} {lang}</span>
-          <span>·</span>
-          <span>{format}</span>
-          <span>·</span>
-          <span className="text-accent">{model}</span>
+    <div className="rounded-xl border border-border bg-surface-2 p-4 hover:border-accent/30 transition-colors">
+      <div className="flex items-center gap-4">
+        <button
+          onClick={toggle}
+          disabled={loading}
+          className="w-10 h-10 rounded-full bg-accent/10 flex items-center justify-center text-accent hover:bg-accent hover:text-slate-900 transition-all shrink-0 disabled:opacity-50"
+        >
+          {loading ? (
+            <div className="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+          ) : playing ? (
+            <Pause className="w-4 h-4" />
+          ) : (
+            <Play className="w-4 h-4 ml-0.5" />
+          )}
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-medium truncate">{title}</div>
+          <div className="text-xs text-muted flex items-center gap-2 mt-0.5">
+            <span>{flag} {lang}</span>
+            <span>·</span>
+            <span>{format}</span>
+            <span>·</span>
+            <span className="text-accent">{model}</span>
+          </div>
+        </div>
+        <div className="text-xs text-muted font-mono shrink-0">
+          {formatTime(currentTime)} / {duration > 0 ? formatTime(duration) : staticDuration}
         </div>
       </div>
-      <div className="text-xs text-muted font-mono shrink-0">{duration}</div>
+      {/* Draggable progress bar */}
+      <div className="mt-3 select-none">
+        <div
+          ref={barRef}
+          className="h-1.5 w-full rounded-full bg-surface-3 cursor-pointer overflow-hidden"
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+        >
+          <div
+            className="h-full bg-accent rounded-full"
+            style={{ width: `${progress}%`, transition: dragging ? "none" : "width 0.1s linear" }}
+          />
+        </div>
+      </div>
       <audio ref={audioRef} src={file} preload="metadata" />
     </div>
   );
