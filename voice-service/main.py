@@ -98,6 +98,27 @@ from pydantic import BaseModel, Field
 from pydub import AudioSegment
 from scipy.io import wavfile
 
+# Shared script contract: turn keys, delivery directives, chunking, voice resolution.
+from audio_pipeline import measure_loudness, normalize_loudness
+from script_pipeline import (
+    DEFAULT_STYLE,
+    build_units,
+    group_units,
+    list_voices,
+    normalize_turns,
+    plan_generation,
+    resolve_voices,
+    segment_gap_seconds,
+    speaker_order,
+    split_units,
+    style_names,
+    style_params,
+    strip_directives,
+    turn_content,
+    turn_speaker,
+    units_to_script_lines,
+)
+
 # ============== VibeVoice imports ==============
 from vibevoice.modular.modeling_vibevoice_streaming_inference import VibeVoiceStreamingForConditionalGenerationInference
 from vibevoice.processor.vibevoice_streaming_processor import VibeVoiceStreamingProcessor
@@ -301,13 +322,14 @@ class TTSRealtimeRequest(BaseModel):
     language: Optional[str] = "en"
 
 class TTSLongformRequest(BaseModel):
-    script: List[Dict[str, Any]] = Field(..., min_length=1)  # [{"role": "Alice", "content": "Hello"}]
+    script: List[Dict[str, Any]] = Field(..., min_length=1)  # [{"speaker": "Host", "content": "Hello"}]
     voice_names: Optional[List[str]] = None
     cfg_scale: Optional[float] = 1.3
     save_to_disk: Optional[bool] = True
     topic: Optional[str] = None
     format: Optional[str] = "interview"
     language: Optional[str] = "en"
+    style: Optional[str] = None  # episode wide delivery style, directives can override
 
 LANGUAGE_MAP = {
     "en": "English",
@@ -323,12 +345,18 @@ LANGUAGE_MAP = {
     "od-IN": "Odia",
 }
 
+# Sarvam uses ISO 639-1 language codes, the app uses ISO 639-3 for a few languages.
+SARVAM_LANGUAGE_CODES = {
+    "od-IN": "or-IN",
+}
+
 class PodcastGenerateRequest(BaseModel):
     topic: str
     duration_minutes: int = Field(default=2, ge=2, le=30)
     format: str = Field(default="monologue", pattern="^(monologue|interview|panel)$")
     speakers: Optional[List[str]] = Field(default=None, max_length=3)
     language: str = Field(default="en", pattern="^(en|hi-IN|ta-IN|te-IN|kn-IN|bn-IN|mr-IN|gu-IN|ml-IN|pa-IN|od-IN)$")
+    style: Optional[str] = Field(default=None, pattern="^(neutral|calm|narrative|serious|warm|excited)$")
 
 class PodcastScriptResponse(BaseModel):
     topic: str
@@ -344,12 +372,15 @@ class SarvamTTSRequest(BaseModel):
     speaker: str = Field(default="shubh")
     pace: float = Field(default=1.0, ge=0.5, le=2.0)
     temperature: float = Field(default=0.6, ge=0.01, le=1.0)
-    model: str = Field(default="bulbul:v3", pattern="^(bulbul:v3|bulbul:v2)$")
+    model: str = Field(default="bulbul:v3", pattern="^(bulbul:v4-flash|bulbul:v3|bulbul:v2)$")
     output_audio_codec: str = Field(default="wav", pattern="^(wav|mp3|aac|opus|flac|pcm|mulaw|alaw)$")
     save_to_disk: Optional[bool] = False
     topic: Optional[str] = None
     format: Optional[str] = "monologue"
     language: Optional[str] = "en"
+    pitch: Optional[float] = Field(default=None, ge=-0.5, le=0.5)
+    loudness: Optional[float] = Field(default=None, ge=0.1, le=2.5)
+    dict_id: Optional[str] = None  # Sarvam pronunciation dictionary id
 
 # ============== Model Loaders ==============
 
@@ -486,6 +517,61 @@ from rss_generator import generate_podcast_rss
 
 # ============== Helpers ==============
 
+LOUDNESS_NORMALIZATION = os.environ.get("NORMALIZE_LOUDNESS", "true").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+
+def _finalize_audio(audio_bytes: bytes, metadata: Optional[Dict[str, Any]] = None) -> bytes:
+    """Normalise loudness for podcast delivery and record the measurement.
+
+    Every export goes through here, so the file on disk and the audio the browser
+    plays are always the same normalised audio.
+    """
+    normalized = normalize_loudness(audio_bytes, enabled=LOUDNESS_NORMALIZATION)
+    if metadata is not None:
+        measurement = measure_loudness(normalized)
+        if measurement:
+            metadata["loudness"] = measurement
+    return normalized
+
+def _save_transcript_sidecar(
+    saved_filename: str,
+    script: List[Dict[str, Any]],
+    metadata: Dict[str, Any],
+) -> Optional[str]:
+    """Write the episode transcript next to the audio for the RSS feed.
+
+    Podcasting 2.0 hosts can show the transcript, and the file is also a plain text
+    transcript for anything else that wants the words of the episode.
+    """
+    if not saved_filename:
+        return None
+    try:
+        base = os.path.splitext(saved_filename)[0]
+        path = f"{base}.transcript.json"
+        payload = {
+            "title": metadata.get("topic") or os.path.basename(base),
+            "language": metadata.get("language"),
+            "format": metadata.get("format"),
+            "duration_seconds": metadata.get("duration_seconds"),
+            "script": [
+                {
+                    "speaker": turn_speaker(item),
+                    "content": turn_content(item),
+                }
+                for item in normalize_turns(script)
+            ],
+        }
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, ensure_ascii=False)
+        return path
+    except Exception as e:
+        logger.warning("Could not write transcript sidecar: %s", e)
+        return None
+
 def save_to_outputs(audio_bytes: bytes, prefix: str = "podcast", metadata: Optional[Dict[str, Any]] = None) -> str:
     """Save audio bytes to outputs directory with timestamp.
     
@@ -569,6 +655,15 @@ def tavily_research(topic: str) -> str:
         print(f"Tavily research failed: {e}")
         return ""
 
+def _model_id(env_key: str, default: str) -> str:
+    """Model id for a provider, overridable by environment variable.
+
+    Providers retire model ids regularly, so every id lives here and can be changed
+    without touching code.
+    """
+    return os.environ.get(env_key, default).strip() or default
+
+
 def groq_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperature: float = 0.7) -> str:
     """Call Groq API with fast capped retry so fallback happens quickly."""
     groq_key = get_api_key("GROQ_API_KEY")
@@ -585,7 +680,7 @@ def groq_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperature
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "llama-3.3-70b-versatile",
+                    "model": _model_id("GROQ_MODEL", "openai/gpt-oss-120b"),
                     "messages": messages,
                     "temperature": temperature,
                     "max_tokens": max_tokens,
@@ -623,7 +718,7 @@ def deepseek_chat(messages: List[Dict[str, str]], max_tokens: int = 600, tempera
         "https://api.deepseek.com/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         json={
-            "model": "deepseek-chat",
+            "model": _model_id("DEEPSEEK_MODEL", "deepseek-v4-flash"),
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -642,7 +737,7 @@ def gemini_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperatu
         "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         json={
-            "model": "gemini-2.0-flash",
+            "model": _model_id("GEMINI_MODEL", "gemini-2.5-flash"),
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -661,7 +756,7 @@ def mistral_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperat
         "https://api.mistral.ai/v1/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         json={
-            "model": "mistral-small-latest",
+            "model": _model_id("MISTRAL_MODEL", "mistral-small-latest"),
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -680,7 +775,7 @@ def together_chat(messages: List[Dict[str, str]], max_tokens: int = 600, tempera
         "https://api.together.xyz/v1/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         json={
-            "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            "model": _model_id("TOGETHER_MODEL", "together_ai/deepseek-ai/DeepSeek-V4.1-Flash-1017"),
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -692,7 +787,7 @@ def together_chat(messages: List[Dict[str, str]], max_tokens: int = 600, tempera
 
 def ollama_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperature: float = 0.7) -> str:
     """Call local Ollama server (OpenAI-compatible endpoint)."""
-    model = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
+    model = os.environ.get("OLLAMA_MODEL", "qwen3:8b")
     base = os.environ.get("OLLAMA_API_BASE", "http://localhost:11434")
     try:
         resp = requests.post(
@@ -714,6 +809,48 @@ def ollama_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperatu
         print(f"[ollama debug] Unexpected error: {type(e).__name__}: {e}")
         raise
 
+_openrouter_free_model: Optional[str] = None
+
+def _openrouter_model() -> str:
+    """Pick a free OpenRouter model that is routable right now.
+
+    Free model ids churn constantly, so the catalogue is read at runtime instead of
+    hard coding an id that silently stops working.
+    """
+    override = os.environ.get("OPENROUTER_MODEL", "").strip()
+    if override:
+        return override
+
+    global _openrouter_free_model
+    if _openrouter_free_model:
+        return _openrouter_free_model
+
+    try:
+        resp = requests.get("https://openrouter.ai/api/v1/models", timeout=15)
+        resp.raise_for_status()
+        free = [m.get("id", "") for m in resp.json().get("data", [])]
+        free = [model_id for model_id in free if model_id.endswith(":free")]
+    except Exception as e:
+        print(f"[openrouter] free model lookup failed: {e}")
+        free = []
+
+    if not free:
+        raise HTTPException(
+            status_code=503,
+            detail="No free OpenRouter model is available right now. Set OPENROUTER_MODEL to a model id.",
+        )
+
+    # Prefer the families that write scripts well, then fall back to alphabetical order.
+    preferred = [
+        model_id
+        for model_id in free
+        if any(tag in model_id for tag in ("gpt-oss", "llama-3.3", "qwen3"))
+    ]
+    chosen = sorted(preferred or free)[0]
+    _openrouter_free_model = chosen
+    print(f"[openrouter] using free model {chosen}")
+    return chosen
+
 def openrouter_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperature: float = 0.7) -> str:
     """Call OpenRouter as final fallback."""
     api_key = get_api_key("OPENROUTER_API_KEY")
@@ -723,31 +860,12 @@ def openrouter_chat(messages: List[Dict[str, str]], max_tokens: int = 600, tempe
         "https://openrouter.ai/api/v1/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         json={
-            "model": "mistralai/mistral-7b-instruct:free",
+            "model": _openrouter_model(),
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
         },
         timeout=25,
-    )
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"].strip()
-
-def github_models_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperature: float = 0.7) -> str:
-    """Call GitHub Models endpoint (free GPT-4o)."""
-    api_key = get_api_key("GITHUB_PERSONAL_ACCESS_TOKEN")
-    if not api_key:
-        raise HTTPException(status_code=503, detail="GITHUB_PERSONAL_ACCESS_TOKEN not configured")
-    resp = requests.post(
-        "https://models.inference.ai.azure.com/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={
-            "model": "gpt-4o",
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        },
-        timeout=60,
     )
     resp.raise_for_status()
     return resp.json()["choices"][0]["message"]["content"].strip()
@@ -761,7 +879,7 @@ def dialogram_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temper
         "https://www.dialogram.me/router/v1/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         json={
-            "model": "qwen-3.6-plus",
+            "model": _model_id("DIALOGRAM_MODEL", "qwen-3.6-plus"),
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -776,7 +894,6 @@ def llm_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperature:
     errors = []
     providers = [
         ("Dialogram", dialogram_chat),
-        ("GitHub Models", github_models_chat),
         ("Groq", groq_chat),
         ("DeepSeek", deepseek_chat),
         ("Ollama", ollama_chat),
@@ -796,6 +913,22 @@ def llm_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperature:
                 detail = e.detail
             errors.append(f"{name}: {detail}")
     raise HTTPException(status_code=429, detail=f"All LLM providers failed: {' | '.join(errors)}")
+
+def _delivery_instructions(style: Optional[str]) -> str:
+    """Prompt block that tells the scriptwriter how to mark delivery.
+
+    The markers are the same ones the TTS layer understands: ``[[pause:0.6]]`` inserts
+    silence, ``[[style:calm]]`` changes delivery for the rest of that turn.
+    """
+    rules = """
+Delivery directions, written inline where they belong:
+- Insert [[pause:0.6]] at natural beats: after a question, before an answer, after a key fact, and at the end of a section. Use 0.3 to 1.2 seconds and never two in a row.
+- Mark a genuine tonal shift with [[style:calm]], [[style:excited]], [[style:serious]] or [[style:narrative]], at most twice in the whole script.
+- Write no other bracket markers, no stage directions and no sound effects."""
+
+    if style and style != DEFAULT_STYLE:
+        rules += f"\n- The overall delivery of this episode is {style}."
+    return rules
 
 def parse_conversation_script(raw_text: str, speakers: List[str]) -> List[Dict[str, str]]:
     """Parse raw conversation text into structured script array."""
@@ -938,6 +1071,38 @@ async def health():
         "mps_available": torch.backends.mps.is_available(),
     }
 
+@app.get("/voices")
+async def voices_catalog():
+    """List the voice presets available for longform and streaming synthesis.
+
+    The UI uses this to offer a voice per speaker instead of guessing one.
+    """
+    longform_voices = [
+        {
+            "id": voice["id"],
+            "language": voice["language"],
+            "gender": voice["gender"],
+            "name": voice["name"],
+        }
+        for voice in list_voices(LONGFORM_VOICES_DIR)
+        if voice["ext"] == "wav"
+    ]
+    streaming_voices = [
+        {
+            "id": voice["id"],
+            "language": voice["language"],
+            "gender": voice["gender"],
+            "name": voice["name"],
+        }
+        for voice in list_voices(VOICES_DIR)
+        if voice["ext"] == "pt"
+    ]
+    return {
+        "longform": longform_voices,
+        "streaming": streaming_voices,
+        "styles": style_names(),
+    }
+
 @app.get("/models/status")
 async def models_status():
     """Return detailed status of all TTS/ASR models: cached, loaded, sizes."""
@@ -996,7 +1161,6 @@ async def get_config_endpoint():
         "DIALOGRAM_API_KEY",
         "SARVAM_API_KEY",
         "GROQ_API_KEY",
-        "GITHUB_PERSONAL_ACCESS_TOKEN",
         "TAVILY_API_KEY",
         "DEEPSEEK_API_KEY",
         "GEMINI_API_KEY",
@@ -1017,7 +1181,6 @@ async def post_config_endpoint(request: Request):
         "DIALOGRAM_API_KEY",
         "SARVAM_API_KEY",
         "GROQ_API_KEY",
-        "GITHUB_PERSONAL_ACCESS_TOKEN",
         "TAVILY_API_KEY",
         "DEEPSEEK_API_KEY",
         "GEMINI_API_KEY",
@@ -1053,65 +1216,8 @@ def get_max_longform_words() -> int:
     return MAX_LONGFORM_WORDS_MPS if DEVICE == "mps" else MAX_LONGFORM_WORDS_CPU
 
 # ============== Auto-Chunking for Longform TTS ==============
-
-def _split_text_into_sentences(text: str) -> List[str]:
-    """Split text into sentences, preserving speaker prefixes if present."""
-    # Split on sentence terminators for multiple languages
-    sentences = re.split(r'(?<=[.।।|!?।])\s+', text)
-    return [s.strip() for s in sentences if s.strip()]
-
-def _chunk_script_by_words(script: List[Dict[str, str]], max_words: int) -> List[List[Dict[str, str]]]:
-    """
-    Split a multi-speaker script into chunks where each chunk has <= max_words.
-    Splits at sentence boundaries to avoid cutting mid-sentence.
-    Preserves speaker continuity across chunks.
-    """
-    # Flatten into (speaker, sentence, word_count) tuples
-    sentences = []
-    for item in script:
-        speaker = item.get("role", "Speaker")
-        content = item.get("content", "")
-        for sent in _split_text_into_sentences(content):
-            words = len(sent.split())
-            sentences.append({"speaker": speaker, "text": sent, "words": words})
-    
-    # Group sentences into chunks
-    chunks = []
-    current_chunk = []
-    current_words = 0
-    
-    for sent in sentences:
-        if current_words + sent["words"] > max_words and current_chunk:
-            # Finalize current chunk
-            chunks.append(current_chunk)
-            current_chunk = [sent]
-            current_words = sent["words"]
-        else:
-            current_chunk.append(sent)
-            current_words += sent["words"]
-    
-    if current_chunk:
-        chunks.append(current_chunk)
-    
-    # Convert chunks back into script format (group consecutive same-speaker sentences)
-    result = []
-    for chunk in chunks:
-        script_lines = []
-        current_speaker = None
-        current_text = ""
-        for sent in chunk:
-            if sent["speaker"] == current_speaker:
-                current_text += " " + sent["text"]
-            else:
-                if current_speaker and current_text:
-                    script_lines.append({"role": current_speaker, "content": current_text.strip()})
-                current_speaker = sent["speaker"]
-                current_text = sent["text"]
-        if current_speaker and current_text:
-            script_lines.append({"role": current_speaker, "content": current_text.strip()})
-        result.append(script_lines)
-    
-    return result
+# Chunking, sentence splitting and voice assignment live in script_pipeline so the
+# generator, the longform path and the realtime path cannot drift apart.
 
 def _mps_cleanup():
     """Explicitly clear MPS cache and run GC. Critical for 24GB Macs."""
@@ -1124,20 +1230,19 @@ def _mps_cleanup():
 
 def _generate_longform_chunk(
     processor, model,
-    chunk_script: List[Dict[str, str]],
+    segment: List[Dict[str, Any]],
     voice_samples: List[str],
     cfg_scale: float,
     target_device: str
 ) -> bytes:
-    """Generate audio for a single chunk. Returns WAV bytes."""
-    lines = []
-    for i, item in enumerate(chunk_script):
-        role = item.get("role", f"Speaker {i+1}")
-        content = item.get("content", "")
-        lines.append(f"Speaker {i+1}: {content}")
-    
-    full_script = '\n'.join(lines).replace("’", "'")
-    
+    """Generate audio for one synthesis segment. Returns WAV bytes.
+
+    ``segment`` is a list of units with a stable global ``speaker_id``; the script the
+    model sees is ``Speaker N: text`` where N is that global id, so the voice sample
+    list stays aligned with the speakers across every segment of the episode.
+    """
+    full_script = units_to_script_lines(segment).replace("’", "'")
+
     inputs = processor(
         text=[full_script],
         voice_samples=[voice_samples],
@@ -1145,15 +1250,15 @@ def _generate_longform_chunk(
         return_tensors="pt",
         return_attention_mask=True,
     )
-    
+
     for k, v in inputs.items():
         if torch.is_tensor(v):
             inputs[k] = v.to(target_device)
-    
+
     # Cap max_new_tokens to avoid runaway generation on MPS.
     # Rough heuristic: ~2.5 tokens per character for this model's speech representation.
     estimated_tokens = min(int(len(full_script) * 2.5) + 512, 8192)
-    
+
     with _tts_generation_lock, torch.inference_mode():
         outputs = model.generate(
             **inputs,
@@ -1163,7 +1268,7 @@ def _generate_longform_chunk(
             generation_config={'do_sample': False},
             verbose=False,
         )
-    
+
     tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
@@ -1174,7 +1279,7 @@ def _generate_longform_chunk(
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
-    
+
     try:
         del inputs
     except NameError:
@@ -1183,30 +1288,36 @@ def _generate_longform_chunk(
         del outputs
     except NameError:
         pass
-    
+
     # Critical: clear MPS cache after each chunk to prevent accumulation
     _mps_cleanup()
-    
+
     return audio_bytes
 
-def _stitch_wav_bytes(chunks: List[bytes], silence_ms: int = 300) -> bytes:
-    """Stitch multiple WAV byte arrays with silence gaps. Returns combined WAV bytes."""
+def _stitch_wav_bytes(chunks: List[bytes], silence_ms: int = 300, gaps_ms: Optional[List[int]] = None) -> bytes:
+    """Stitch WAV byte arrays with silence gaps. Returns combined WAV bytes.
+
+    ``gaps_ms`` optionally sets the silence after each chunk. A gap of 0 means the
+    chunks are joined without a break.
+    """
     if not chunks:
         return b""
     if len(chunks) == 1:
         return chunks[0]
-    
+
     segments = []
     for chunk in chunks:
         seg = AudioSegment.from_file(io.BytesIO(chunk), format="wav")
         segments.append(seg)
-    
-    # Concatenate with silence gaps
-    silence = AudioSegment.silent(duration=silence_ms)
+
     final = segments[0]
-    for seg in segments[1:]:
-        final = final + silence + seg
-    
+    for index, seg in enumerate(segments[1:]):
+        gap = gaps_ms[index] if gaps_ms and index < len(gaps_ms) else silence_ms
+        if gap > 0:
+            final = final + AudioSegment.silent(duration=gap) + seg
+        else:
+            final = final + seg
+
     buf = io.BytesIO()
     final.export(buf, format="wav")
     buf.seek(0)
@@ -1214,81 +1325,99 @@ def _stitch_wav_bytes(chunks: List[bytes], silence_ms: int = 300) -> bytes:
 
 # ============== TTS Endpoints ==============
 
-def _do_tts_realtime_sync(text: str, speaker_name: str, cfg_scale: float, save_to_disk: bool, topic: Optional[str], format: Optional[str], language: Optional[str]) -> tuple:
+def _do_tts_realtime_sync(text: str, speaker_name: Optional[str], cfg_scale: Optional[float], save_to_disk: Optional[bool], topic: Optional[str], format: Optional[str], language: Optional[str]) -> tuple:
     """Synchronous helper for realtime TTS. Runs inside a thread pool.
     Returns (audio_bytes, saved_filename)."""
     processor, model = load_realtime_tts()
-    
-    voice_name = speaker_name.lower()
-    voice_path = None
-    for f in os.listdir(VOICES_DIR):
-        if f.lower().endswith(".pt") and voice_name in f.lower():
-            voice_path = os.path.join(VOICES_DIR, f)
-            break
-    
-    if not voice_path:
-        pt_files = [f for f in os.listdir(VOICES_DIR) if f.endswith(".pt")]
-        if not pt_files:
-            raise HTTPException(status_code=500, detail="No voice presets found")
-        voice_path = os.path.join(VOICES_DIR, pt_files[0])
-    
+
+    speaker_name = speaker_name or "Carter"
+    cfg_scale = cfg_scale if cfg_scale is not None else 1.5
+
+    voices = [voice for voice in list_voices(VOICES_DIR) if voice["ext"] == "pt"]
+    if not voices:
+        raise HTTPException(status_code=500, detail="No voice presets found")
+
+    assignment, _warnings = resolve_voices([speaker_name], voices)
+    voice_id = assignment.get(speaker_name, voices[0]["id"])
+    voice_path = next(voice["path"] for voice in voices if voice["id"] == voice_id)
+
     target_device = DEVICE if DEVICE != "cpu" else "cpu"
     all_prefilled_outputs = torch.load(voice_path, map_location=target_device, weights_only=False)
-    
-    inputs = processor.process_input_with_cached_prompt(
-        text=text,
-        cached_prompt=all_prefilled_outputs,
-        padding=True,
-        return_tensors="pt",
-        return_attention_mask=True,
-    )
-    
-    for k, v in inputs.items():
-        if torch.is_tensor(v):
-            inputs[k] = v.to(target_device)
-    
-    try:
-        with _tts_generation_lock:
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=None,
-                cfg_scale=cfg_scale,
-                tokenizer=processor.tokenizer,
-                generation_config={'do_sample': False},
-                verbose=False,
-                all_prefilled_outputs=copy.deepcopy(all_prefilled_outputs) if all_prefilled_outputs is not None else None,
-            )
-        
-        tmp_path = None
+
+    def synth(unit_text: str, unit_cfg: float) -> bytes:
+        """Generate one stretch of speech with the streaming voice."""
+        inputs = processor.process_input_with_cached_prompt(
+            text=unit_text,
+            cached_prompt=all_prefilled_outputs,
+            padding=True,
+            return_tensors="pt",
+            return_attention_mask=True,
+        )
+
+        for k, v in inputs.items():
+            if torch.is_tensor(v):
+                inputs[k] = v.to(target_device)
+
         try:
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                processor.save_audio(outputs.speech_outputs[0], output_path=tmp.name)
-                tmp_path = tmp.name
-            
-            with open(tmp_path, "rb") as f:
-                audio_bytes = f.read()
+            with _tts_generation_lock:
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=None,
+                    cfg_scale=unit_cfg,
+                    tokenizer=processor.tokenizer,
+                    generation_config={'do_sample': False},
+                    verbose=False,
+                    all_prefilled_outputs=copy.deepcopy(all_prefilled_outputs) if all_prefilled_outputs is not None else None,
+                )
+
+            tmp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                    processor.save_audio(outputs.speech_outputs[0], output_path=tmp.name)
+                    tmp_path = tmp.name
+
+                with open(tmp_path, "rb") as f:
+                    return f.read()
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
         finally:
-            if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-    finally:
-        try:
-            del inputs
-        except NameError:
-            pass
-        try:
-            del outputs
-        except NameError:
-            pass
-        _mps_cleanup()
-    
+            try:
+                del inputs
+            except NameError:
+                pass
+            try:
+                del outputs
+            except NameError:
+                pass
+            _mps_cleanup()
+
+    # Delivery directives split the text into stretches separated by pauses.
+    units = split_units(text)
+    if not units:
+        raise HTTPException(status_code=400, detail="text is empty")
+
+    audios: List[bytes] = []
+    gaps_ms: List[int] = []
+    for unit in units:
+        unit_cfg = cfg_scale if unit["style"] == DEFAULT_STYLE else style_params(unit["style"])["cfg_scale"]
+        audios.append(synth(unit["text"], unit_cfg))
+        gaps_ms.append(int(round((unit.get("pause_after") or 0.0) * 1000)))
+
+    if len(audios) == 1:
+        audio_bytes = audios[0]
+    else:
+        audio_bytes = _stitch_wav_bytes(audios, silence_ms=0, gaps_ms=gaps_ms)
+
     saved_filename = None
     if save_to_disk:
         word_count = len(text.split())
         meta = {"word_count": word_count, "speaker_name": speaker_name, "format": format, "language": language}
         if topic:
             meta["topic"] = topic
+        audio_bytes = _finalize_audio(audio_bytes, meta)
         saved_filename = save_to_outputs(audio_bytes, prefix="podcast_realtime", metadata=meta)
-    
+
     return audio_bytes, saved_filename
 
 
@@ -1320,128 +1449,65 @@ def _do_tts_longform_sync(req: TTSLongformRequest, max_words: int, req_id: str) 
     load_time = round(time.time() - t0, 2)
     log_audio_event("info", "LONGFORM_MODEL_READY", extra={"load_time_sec": load_time}, req_id=req_id)
     
-    # Build voice samples list (same for all chunks)
-    voice_names = []
-    for i, item in enumerate(req.script):
-        voice_names.append(item.get("role", f"Speaker {i+1}"))
-    
-    seen = set()
-    unique_voices = []
-    for name in voice_names:
-        if name not in seen:
-            seen.add(name)
-            unique_voices.append(name)
-    
-    voice_samples = []
-    for name in unique_voices:
-        voice_path = None
-        for f in os.listdir(LONGFORM_VOICES_DIR):
-            if f.lower().endswith('.wav') and name.lower() in f.lower():
-                voice_path = os.path.join(LONGFORM_VOICES_DIR, f)
-                break
-        if not voice_path:
-            wavs = [f for f in os.listdir(LONGFORM_VOICES_DIR) if f.lower().endswith('.wav')]
-            voice_path = os.path.join(LONGFORM_VOICES_DIR, wavs[0])
-        voice_samples.append(voice_path)
-    
+    # Resolve the script once: normalised turns, stable speaker ids, delivery units.
+    turns = normalize_turns(req.script)
+    if not turns:
+        raise HTTPException(status_code=400, detail="script is empty")
+
+    speakers = speaker_order(turns)
+    voices = list_voices(LONGFORM_VOICES_DIR)
+    assignment, voice_warnings = resolve_voices(speakers, voices, req.voice_names)
+    for warning in voice_warnings:
+        log_audio_event("warning", "LONGFORM_VOICE_WARNING", extra={"detail": warning}, req_id=req_id)
+
+    voice_paths = {voice["id"]: voice["path"] for voice in voices}
+    voice_samples = [voice_paths[assignment[name]] for name in speakers if name in assignment]
+    if not voice_samples:
+        raise HTTPException(
+            status_code=500, detail="no voice files found in the longform voices directory"
+        )
+
+    grouped = group_units(build_units(turns, default_style=req.style or DEFAULT_STYLE))
+    segments = plan_generation(grouped, max_words)
+    chunks_used = len(segments)
+    total_words = sum(len(unit["text"].split()) for unit in grouped)
+
+    log_audio_event("info", "LONGFORM_PLAN",
+                    extra={"words": total_words, "segments": chunks_used, "speakers": speakers,
+                           "voices": assignment, "max_words_per_segment": max_words}, req_id=req_id)
+
     target_device = DEVICE if DEVICE != "cpu" else "cpu"
-    chunks_used = 1
-    
+    base_cfg = req.cfg_scale if req.cfg_scale is not None else 1.3
+
     # Start periodic MPS cache clear for long generations
     start_mps_cache_clear()
     try:
-        # Decide: single pass or chunked
-        if sum(len(item.get("content", "").split()) for item in req.script) <= max_words:
-            # Single-pass generation
-            total_words = sum(len(item.get("content", "").split()) for item in req.script)
-            log_audio_event("info", "LONGFORM_SINGLE_PASS",
-                extra={"words": total_words, "unique_voices": len(unique_voices)}, req_id=req_id)
-            
-            lines = []
-            for i, item in enumerate(req.script):
-                role = item.get("role", f"Speaker {i+1}")
-                content = item.get("content", "")
-                lines.append(f"Speaker {i+1}: {content}")
-            full_script = '\n'.join(lines).replace("’", "'")
-            
-            inputs = processor(
-                text=[full_script],
-                voice_samples=[voice_samples],
-                padding=True,
-                return_tensors="pt",
-                return_attention_mask=True,
+        segment_audios: List[bytes] = []
+        gaps_ms: List[int] = []
+        for idx, segment in enumerate(segments):
+            segment_words = sum(len(unit["text"].split()) for unit in segment)
+            style = segment[0]["style"]
+            cfg = base_cfg if style == DEFAULT_STYLE else style_params(style)["cfg_scale"]
+            segment_t0 = time.time()
+            log_audio_event("info", f"LONGFORM_SEGMENT_{idx+1}_START",
+                            extra={"segment_words": segment_words, "segment_idx": idx + 1,
+                                   "total_segments": chunks_used, "style": style}, req_id=req_id)
+
+            segment_bytes = _generate_longform_chunk(
+                processor, model, segment, voice_samples, cfg, target_device
             )
-            for k, v in inputs.items():
-                if torch.is_tensor(v):
-                    inputs[k] = v.to(target_device)
-            
-            estimated_tokens = min(int(len(full_script) * 2.5) + 512, 8192)
-            gen_t0 = time.time()
-            log_audio_event("info", "LONGFORM_GENERATION_START", req_id=req_id)
-            try:
-                with _tts_generation_lock, torch.inference_mode():
-                    outputs = model.generate(
-                        **inputs,
-                        max_new_tokens=estimated_tokens,
-                        cfg_scale=req.cfg_scale,
-                        tokenizer=processor.tokenizer,
-                        generation_config={'do_sample': False},
-                        verbose=False,
-                    )
-                gen_time = round(time.time() - gen_t0, 2)
-                log_audio_event("info", "LONGFORM_GENERATION_COMPLETE",
-                    extra={"gen_time_sec": gen_time}, req_id=req_id)
-                
-                tmp_path = None
-                try:
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                        processor.save_audio(outputs.speech_outputs[0], output_path=tmp.name)
-                        tmp_path = tmp.name
-                    with open(tmp_path, "rb") as f:
-                        audio_bytes = f.read()
-                finally:
-                    if tmp_path and os.path.exists(tmp_path):
-                        os.unlink(tmp_path)
-            finally:
-                try:
-                    del inputs
-                except NameError:
-                    pass
-                try:
-                    del outputs
-                except NameError:
-                    pass
-            chunks_used = 1
-        else:
-            # Chunked generation to avoid OOM
-            total_words = sum(len(item.get("content", "").split()) for item in req.script)
-            chunks = _chunk_script_by_words(req.script, max_words)
-            chunks_used = len(chunks)
-            log_audio_event("info", "LONGFORM_CHUNKED_MODE",
-                extra={"total_words": total_words, "chunks": chunks_used, "max_words_per_chunk": max_words}, req_id=req_id)
-            
-            chunk_audios = []
-            for idx, chunk_script in enumerate(chunks):
-                chunk_words = sum(len(item.get("content", "").split()) for item in chunk_script)
-                chunk_t0 = time.time()
-                log_audio_event("info", f"LONGFORM_CHUNK_{idx+1}_START",
-                    extra={"chunk_words": chunk_words, "chunk_idx": idx + 1, "total_chunks": chunks_used}, req_id=req_id)
-                
-                chunk_bytes = _generate_longform_chunk(
-                    processor, model, chunk_script, voice_samples,
-                    req.cfg_scale, target_device
-                )
-                chunk_time = round(time.time() - chunk_t0, 2)
-                log_audio_event("info", f"LONGFORM_CHUNK_{idx+1}_COMPLETE",
-                    extra={"chunk_time_sec": chunk_time, "chunk_bytes": len(chunk_bytes)}, req_id=req_id)
-                chunk_audios.append(chunk_bytes)
-            
-            # Stitch all chunks together
-            stitch_t0 = time.time()
-            audio_bytes = _stitch_wav_bytes(chunk_audios, silence_ms=400)
-            stitch_time = round(time.time() - stitch_t0, 2)
-            log_audio_event("info", "LONGFORM_STITCH_COMPLETE",
-                extra={"stitch_time_sec": stitch_time, "total_bytes": len(audio_bytes)}, req_id=req_id)
+            log_audio_event("info", f"LONGFORM_SEGMENT_{idx+1}_COMPLETE",
+                            extra={"segment_time_sec": round(time.time() - segment_t0, 2),
+                                   "segment_bytes": len(segment_bytes)}, req_id=req_id)
+            segment_audios.append(segment_bytes)
+            gaps_ms.append(int(round(segment_gap_seconds(segment) * 1000)))
+
+        # Stitch every segment together, honouring the pause after each one
+        stitch_t0 = time.time()
+        audio_bytes = _stitch_wav_bytes(segment_audios, silence_ms=400, gaps_ms=gaps_ms)
+        log_audio_event("info", "LONGFORM_STITCH_COMPLETE",
+                        extra={"stitch_time_sec": round(time.time() - stitch_t0, 2),
+                               "total_bytes": len(audio_bytes)}, req_id=req_id)
     finally:
         stop_mps_cache_clear()
         _mps_cleanup()
@@ -1453,12 +1519,13 @@ def _do_tts_longform_sync(req: TTSLongformRequest, max_words: int, req_id: str) 
 @app.post("/tts/longform")
 async def tts_longform(req: TTSLongformRequest):
     req_id = get_request_id()
-    total_words = sum(len(item.get("content", "").split()) for item in req.script)
-    total_chars = sum(len(item.get("content", "")) for item in req.script)
+    turns = normalize_turns(req.script)
+    total_words = sum(len(turn["content"].split()) for turn in turns)
+    total_chars = sum(len(turn["content"]) for turn in turns)
     max_words = get_max_longform_words()
-    
+
     log_audio_event("info", "LONGFORM_REQUEST_START",
-        extra={"words": total_words, "chars": total_chars, "speakers": len(req.script),
+        extra={"words": total_words, "chars": total_chars, "speakers": len(turns),
                "device": DEVICE, "max_allowed": max_words, "format": req.format, "language": req.language})
     
     t0 = time.time()
@@ -1471,19 +1538,22 @@ async def tts_longform(req: TTSLongformRequest):
             _tts_executor, _do_tts_longform_sync, req, max_words, req_id
         )
         
+        meta = {
+            "word_count": total_words,
+            "voice_names": req.voice_names or [],
+            "format": req.format or "interview",
+            "language": req.language,
+            "chunks": chunks_used,
+            "device": DEVICE,
+        }
+        if req.topic:
+            meta["topic"] = req.topic
+        audio_bytes = _finalize_audio(audio_bytes, meta)
+
         saved_filename = None
         if req.save_to_disk:
-            meta = {
-                "word_count": total_words,
-                "voice_names": req.voice_names or [],
-                "format": req.format or "interview",
-                "language": req.language,
-                "chunks": chunks_used,
-                "device": DEVICE,
-            }
-            if req.topic:
-                meta["topic"] = req.topic
             saved_filename = save_to_outputs(audio_bytes, prefix="podcast_longform", metadata=meta)
+            _save_transcript_sidecar(saved_filename, req.script, meta)
         
         total_time = round(time.time() - t0, 2)
         log_audio_event("info", "LONGFORM_REQUEST_COMPLETE",
@@ -1629,23 +1699,53 @@ async def tts_sarvam(req: SarvamTTSRequest):
     
     fallback_triggered = False
     try:
-        chunks = chunk_text_by_sentences(req.text, max_chars=2400)
+        # Delivery directives are honoured here too: the markers are removed from the
+        # text, and the silence they ask for is inserted between the rendered parts.
+        units = split_units(req.text)
+        if not units:
+            raise HTTPException(status_code=400, detail="text is empty")
+
+        chunks: List[str] = []
+        gaps_ms: List[int] = []
+        chunk_styles: List[str] = []
+        for unit in units:
+            pieces = chunk_text_by_sentences(unit["text"], max_chars=2400) or [unit["text"]]
+            for index, piece in enumerate(pieces):
+                chunks.append(piece)
+                chunk_styles.append(unit["style"])
+                last_piece = index == len(pieces) - 1
+                gaps_ms.append(
+                    int(round((unit.get("pause_after") or 0.0) * 1000)) if last_piece else 300
+                )
         if len(chunks) > 1:
-            print(f"Sarvam TTS: text too long ({len(req.text)} chars), splitting into {len(chunks)} chunks")
-        
+            print(f"Sarvam TTS: rendering {len(chunks)} parts for {len(req.text)} chars")
+
+        language_code = SARVAM_LANGUAGE_CODES.get(req.target_language_code, req.target_language_code)
+
         segments = []
         for idx, chunk in enumerate(chunks):
+            style = chunk_styles[idx]
+            params = style_params(style)
             payload = {
                 "text": chunk,
-                "target_language_code": req.target_language_code,
+                "target_language_code": language_code,
                 "speaker": req.speaker,
-                "pace": req.pace,
+                "pace": req.pace if style == DEFAULT_STYLE else params["pace"],
                 "model": req.model,
                 "output_audio_codec": req.output_audio_codec,
             }
-            if req.model == "bulbul:v3":
-                payload["temperature"] = req.temperature
-            
+            if req.model in ("bulbul:v3", "bulbul:v2"):
+                payload["temperature"] = (
+                    req.temperature if style == DEFAULT_STYLE else params["temperature"]
+                )
+            else:
+                if req.pitch is not None:
+                    payload["pitch"] = req.pitch
+                if req.loudness is not None:
+                    payload["loudness"] = req.loudness
+                if req.dict_id:
+                    payload["dict_id"] = req.dict_id
+
             resp = requests.post(
                 "https://api.sarvam.ai/text-to-speech",
                 headers={
@@ -1660,32 +1760,47 @@ async def tts_sarvam(req: SarvamTTSRequest):
                 fallback_triggered = True
                 print(f"[tts/sarvam] Sarvam API error: {resp.status_code} — {resp.text[:200]}. Falling back to local VibeVoice TTS.")
                 return await _tts_local_fallback(req.text, req.speaker, save_to_disk=req.save_to_disk, topic=req.topic)
-            
+
             data = resp.json()
             audio_bytes = base64.b64decode(data["audios"][0])
-            
+
             # Load into pydub AudioSegment for concatenation
             fmt = req.output_audio_codec.replace("mulaw", "wav").replace("alaw", "wav")
             seg = AudioSegment.from_file(io.BytesIO(audio_bytes), format=fmt)
             segments.append(seg)
-        
-        # Concatenate all segments with brief silence between chunks
+
+        # Concatenate the parts, honouring the pause after each one
         final_audio = segments[0]
-        for seg in segments[1:]:
-            final_audio = final_audio + AudioSegment.silent(duration=300) + seg
+        for index, seg in enumerate(segments[1:]):
+            gap = gaps_ms[index] if index < len(gaps_ms) else 300
+            if gap > 0:
+                final_audio = final_audio + AudioSegment.silent(duration=gap) + seg
+            else:
+                final_audio = final_audio + seg
         
+        # Normalise the lossless master once, then encode the requested codec from it,
+        # so the returned audio and the saved episode are the same audio.
+        wav_buf = io.BytesIO()
+        final_audio.export(wav_buf, format="wav")
+        wav_buf.seek(0)
+
+        meta = {"word_count": len(req.text.split()), "speaker": req.speaker, "language": req.language or req.target_language_code, "provider": "sarvam", "chunks": len(chunks), "format": req.format or "monologue"}
+        if req.topic:
+            meta["topic"] = req.topic
+        wav_bytes = _finalize_audio(wav_buf.getvalue(), meta)
+
+        final_audio = AudioSegment.from_file(io.BytesIO(wav_bytes), format="wav")
         buf = io.BytesIO()
         export_format = "wav" if req.output_audio_codec in ("pcm", "mulaw", "alaw") else req.output_audio_codec
         final_audio.export(buf, format=export_format)
         buf.seek(0)
         audio_bytes = buf.read()
-        
+
+        # The episode library stores WAV, whatever codec the caller asked for, so the
+        # history list and the RSS feed never point at a file with the wrong extension.
         saved_filename = None
         if req.save_to_disk:
-            meta = {"word_count": len(req.text.split()), "speaker": req.speaker, "language": req.language or req.target_language_code, "provider": "sarvam", "chunks": len(chunks), "format": req.format or "monologue"}
-            if req.topic:
-                meta["topic"] = req.topic
-            saved_filename = save_to_outputs(audio_bytes, prefix="podcast_sarvam", metadata=meta)
+            saved_filename = save_to_outputs(wav_bytes, prefix="podcast_sarvam", metadata=meta)
         
         codec_to_mime = {
             "wav": "audio/wav", "mp3": "audio/mpeg", "aac": "audio/aac",
@@ -1775,6 +1890,7 @@ Original conversation:
                 return parsed, sum(len(item["content"].split()) for item in parsed)
         
         # Build prompt based on format
+        delivery_rules = _delivery_instructions(req.style)
         if req.format == "monologue":
             system_prompt = f"""You are a podcast scriptwriter. Write a single-host monologue that:
 - Is approximately {target_words} words (about {req.duration_minutes} minutes when spoken)
@@ -1782,7 +1898,8 @@ Original conversation:
 - Presents multiple perspectives fairly
 - Avoids hype, clickbait, or fear-mongering
 - Ends with a brief sign-off
-- Do not use markdown, bullet points, or sound effect cues. Just plain spoken text.{lang_instruction}{length_instruction}"""
+- Do not use markdown, bullet points, or sound effect cues. Just plain spoken text.{lang_instruction}{length_instruction}
+{delivery_rules}"""
             user_prompt = f"Topic: {req.topic}\n\nResearch notes:\n{research}\n\nWrite the monologue script in {lang_name}."
             raw_script = llm_chat([
                 {"role": "system", "content": system_prompt},
@@ -1800,7 +1917,8 @@ Original conversation:
 - Presents multiple perspectives fairly
 - Avoids hype, clickbait, or fear-mongering
 - Ends with a brief sign-off from {speakers[0]}
-- Do not use markdown, bullet points, or sound effect cues.{lang_instruction}{length_instruction}"""
+- Do not use markdown, bullet points, or sound effect cues.{lang_instruction}{length_instruction}
+{delivery_rules}"""
             
             user_prompt = f"Topic: {req.topic}\n\nResearch notes:\n{research}\n\nWrite the full conversation script in {lang_name}."
             
@@ -1827,6 +1945,7 @@ Format rules:
 - Cover all chapters in the outline
 - Natural, conversational dialogue
 - Write entirely in {lang_name}, do not use English.
+{delivery_rules}
 
 Now write the complete script."""
                 raw_script = llm_chat([
@@ -1978,9 +2097,23 @@ async def podcast_delete(filename: str = Query(...)):
 
 @app.get("/feed/podcast.rss")
 async def podcast_feed():
-    """Return a valid RSS 2.0 podcast feed for all saved episodes."""
+    """Return a valid RSS 2.0 podcast feed for all saved episodes.
+
+    ``PUBLIC_BASE_URL`` must point at a host that can reach this machine, otherwise the
+    enclosure URLs in the feed point at localhost and no podcast host can fetch them.
+    """
     try:
-        rss_xml = generate_podcast_rss(OUTPUT_DIR, base_url="http://localhost:9876")
+        rss_xml = generate_podcast_rss(
+            OUTPUT_DIR,
+            base_url=os.environ.get("PUBLIC_BASE_URL", "http://localhost:9876").rstrip("/"),
+            channel_title=os.environ.get("PODCAST_TITLE", "Podcast Brain Pro"),
+            channel_description=os.environ.get(
+                "PODCAST_DESCRIPTION", "AI generated podcasts, rendered locally"
+            ),
+            channel_author=os.environ.get("PODCAST_AUTHOR", "Podcast Brain Pro"),
+            channel_language=os.environ.get("PODCAST_LANGUAGE", "en-us"),
+            channel_category=os.environ.get("PODCAST_CATEGORY", "Technology"),
+        )
         return Response(content=rss_xml, media_type="application/rss+xml; charset=utf-8")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

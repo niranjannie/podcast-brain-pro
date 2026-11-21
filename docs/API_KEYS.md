@@ -5,9 +5,36 @@ Podcast Brain Pro uses a **fallback chain** for script generation. If the primar
 ## Current Fallback Order
 
 1. **Dialogram** (`qwen-3.6-plus`) — recommended primary
-2. **GitHub Models** (`gpt-4o`) — free, reliable
-3. **Groq** (`llama-3.3-70b`) — very fast, rate-limited
-4. **DeepSeek** → **Gemini** → **Mistral** → **Together** → **OpenRouter**
+2. **Groq** (`openai/gpt-oss-120b`) — very fast, rate-limited
+3. **DeepSeek** (`deepseek-v4-flash`)
+4. **Ollama** (local, no key needed)
+5. **Gemini** (`gemini-2.5-flash`)
+6. **Mistral** (`mistral-small-latest`)
+7. **Together AI**
+8. **OpenRouter** (a free model is picked from the live catalogue)
+
+Providers retire model ids. Every id below can be overridden with an environment
+variable, so a retirement is a one line change:
+
+```bash
+GROQ_MODEL=openai/gpt-oss-120b
+DEEPSEEK_MODEL=deepseek-v4-flash
+GEMINI_MODEL=gemini-2.5-flash
+MISTRAL_MODEL=mistral-small-latest
+TOGETHER_MODEL=together_ai/deepseek-ai/DeepSeek-V4.1-Flash-1017
+DIALOGRAM_MODEL=qwen-3.6-plus
+OPENROUTER_MODEL=some/model:free
+```
+
+## Retired Providers
+
+| Provider | Status | What to use instead |
+|---|---|---|
+| GitHub Models (`models.inference.ai.azure.com`) | Inference API retired, 30 Jul 2026 | Any remaining provider in the chain |
+| Groq `llama-3.3-70b-versatile` | Model shut down, 16 Aug 2026 | `openai/gpt-oss-120b` or `qwen/qwen3.8-27b` |
+| Gemini `gemini-2.0-flash` | Model retired, 1 Jun 2026 | `gemini-2.5-flash` or `gemini-3-flash` |
+| DeepSeek `deepseek-chat` | Legacy alias discontinued, 24 Jul 2026 | `deepseek-v4-flash` |
+| OpenRouter `mistralai/mistral-7b-instruct:free` | No provider left for that id | Any `:free` id, or set `OPENROUTER_MODEL` |
 
 ## Free-Tier Providers
 
@@ -15,29 +42,18 @@ Podcast Brain Pro uses a **fallback chain** for script generation. If the primar
 - **Model:** `qwen-3.6-plus` (Alibaba)
 - **Why:** Huge context, excellent creative writing, generous free tier
 - **Get key:** https://dialogram.me/
-
-### GitHub Models
-- **Model:** `gpt-4o`
-- **Why:** Completely free GPT-4o via Azure
-- **Get key:** https://github.com/settings/tokens (classic token with no scopes)
+- **Note:** This is a third party router with no public API docs. Treat it as a
+  convenience, not a guarantee, and keep a second provider key configured.
 
 ### Groq
-- **Model:** `llama-3.3-70b-versatile`
-- **Why:** Blazing fast inference
+- **Model:** `openai/gpt-oss-120b`
+- **Why:** Blazing fast inference, 131k context
 - **Caveat:** Daily rate limits can be exhausted quickly
 - **Get key:** https://console.groq.com/keys
 
-### Cerebras
-- **Why:** Good Groq backup, claims fastest inference
-- **URL:** https://cloud.cerebras.ai/
-
 ### Google AI Studio
-- **Model:** `gemini-2.0-flash`
+- **Model:** `gemini-2.5-flash`
 - **Get key:** https://aistudio.google.com/api-keys
-
-### NVIDIA Build
-- **Why:** Free API keys for NVIDIA-hosted models
-- **URL:** https://build.nvidia.com/
 
 ### Together AI
 - **URL:** https://api.together.ai/settings/api-keys
@@ -45,16 +61,18 @@ Podcast Brain Pro uses a **fallback chain** for script generation. If the primar
 ### Mistral AI
 - **URL:** https://console.mistral.ai/home
 
-### Moonshot AI
-- **Why:** 200K+ context window
-- **URL:** https://platform.moonshot.ai
-
 ### OpenRouter
-- **Why:** Universal fallback with dozens of models
+- **Why:** Universal fallback. The app reads the live model catalogue and picks a free
+  model that is actually routable, instead of hard coding an id that silently dies.
 - **URL:** https://openrouter.ai/settings/keys
 
 ### DeepSeek
 - **URL:** https://platform.deepseek.com/api_keys
+
+### Ollama (fully local)
+- **Why:** No key, no cost, no data leaving the machine. Good for private topics.
+- **Default model:** `qwen3:8b` (set `OLLAMA_MODEL` to change)
+- **URL:** https://ollama.com/
 
 ## Optional: Indian-Language TTS
 
@@ -62,12 +80,20 @@ Podcast Brain Pro uses a **fallback chain** for script generation. If the primar
 - **What:** TTS for Hindi, Tamil, Telugu, Kannada, Bengali, Marathi, Gujarati, Malayalam, Punjabi, Odia
 - **Requires:** Valid `SARVAM_API_KEY`
 - **Get key:** https://dashboard.sarvam.ai/
+- **Models:**
+  - `bulbul:v3` — the default, speaker names like `shubh`
+  - `bulbul:v4-flash` — newer, 200+ styled voices, adds `pitch`, `loudness` and
+    pronunciation dictionaries (`dict_id`). Persona ids on v4 look like
+    `shubh_enhi_ads`; the short v3 ids are rejected by v4 and vice versa.
+- **Language codes:** Sarvam uses ISO 639-1, so Odia is `or-IN`. The app accepts
+  `od-IN` and maps it for you.
 
 ## Optional: Research
 
 ### Tavily
 - **What:** Live web research before script generation
 - **Get key:** https://app.tavily.com/home
+- **Note:** An `advanced` search costs 2 credits, the free tier is 1,000 credits a month.
 
 ---
 
@@ -80,7 +106,7 @@ Create a `.env` file in `voice-service/`:
 
 ```bash
 DIALOGRAM_API_KEY=your_key
-GITHUB_PERSONAL_ACCESS_TOKEN=your_token
+GROQ_API_KEY=your_key
 SARVAM_API_KEY=your_key
 ```
 

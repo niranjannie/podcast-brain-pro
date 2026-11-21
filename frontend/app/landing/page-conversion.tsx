@@ -186,7 +186,7 @@ const FAQ = [
   },
   {
     q: "What languages are supported?",
-    a: "English plus 10 Indian languages: Hindi, Kannada, Tamil, Telugu, Marathi, Bengali, Gujarati, Malayalam, Punjabi, and Assamese.",
+    a: "English plus 10 Indian languages: Hindi, Kannada, Tamil, Telugu, Marathi, Bengali, Gujarati, Malayalam, Punjabi, and Odia.",
   },
   {
     q: "How does the audio quality compare to ElevenLabs?",

@@ -40,7 +40,7 @@ Your ideas deserve to be heard.
 | 4. Generate audio | Local VibeVoice TTS synthesizes human-sounding speech | 30s–15min |
 | 5. Export | WAV + RSS feed + JSON metadata | Instant |
 
-**Languages:** English, Hindi, Kannada, Tamil, Telugu, Marathi, Bengali, Gujarati, Malayalam, Punjabi, Assamese
+**Languages:** English, Hindi, Kannada, Tamil, Telugu, Marathi, Bengali, Gujarati, Malayalam, Punjabi, Odia
 
 **Output formats:** Solo monologue · Two-person interview · Three-person panel discussion
 
@@ -81,8 +81,11 @@ Full setup guide: [`docs/SETUP.md`](./docs/SETUP.md)
 ## 🎯 What Makes It Different
 
 - **Runs entirely on your machine** — Audio synthesis happens locally. No data leaves your computer.
-- **10 Indian languages** — Hindi, Kannada, Tamil, Telugu, Marathi, Bengali, Gujarati, Malayalam, Punjabi, Assamese. Built for multilingual creators.
+- **10 Indian languages** — Hindi, Kannada, Tamil, Telugu, Marathi, Bengali, Gujarati, Malayalam, Punjabi, Odia. Built for multilingual creators.
 - **Natural dialogue formats** — Not just reading text aloud. Interview and panel modes generate interruptions, disagreements, and follow-ups.
+- **Directed delivery** — The scriptwriter marks pauses (`[[pause:0.8]]`) and tonal shifts (`[[style:calm]]`), and the audio engine renders them as real silence and a different voice setting.
+- **A distinct voice per host** — Each speaker is mapped to a voice file, so two hosts never end up sharing one voice.
+- **Podcast ready output** — Every export is normalised to -16 LUFS, the RSS feed carries the transcript, and the episode metadata records the loudness measurement.
 - **RSS feed built-in** — Generate once, publish everywhere. No extra tools needed.
 - **Truly open source** — MIT licensed. Full code, full control, zero restrictions.
 
@@ -157,7 +160,10 @@ podcast-brain-pro/
 ├── frontend/              # Next.js 14 + React + Tailwind
 ├── voice-service/         # FastAPI backend
 │   ├── main.py            # API endpoints, TTS, LLM fallbacks
+│   ├── script_pipeline.py # Script contract, delivery directives, voice mapping
+│   ├── audio_pipeline.py  # Loudness normalisation and measurement
 │   ├── rss_generator.py   # RSS feed generator
+│   ├── test_script_pipeline.py
 │   ├── start.sh           # Startup script
 │   └── .env.example       # API key template
 ├── vibevoice-src/         # Microsoft VibeVoice (pip install -e)
@@ -172,9 +178,11 @@ Podcast Brain Pro uses a **fallback chain** of free-tier LLM providers.
 
 **Recommended:** [Dialogram](https://dialogram.me/) (`qwen-3.6-plus`) — free tier
 
-**Free fallbacks:** GitHub Models (`gpt-4o`), Groq, Cerebras, Gemini, Mistral, NVIDIA, Together AI, OpenRouter
+**Free fallbacks:** Groq (`openai/gpt-oss-120b`), DeepSeek, Gemini, Mistral, Together AI, OpenRouter (a free model is picked from the live catalogue), plus a local Ollama model for fully offline scripting.
 
-**Indic languages:** [Sarvam AI](https://www.sarvam.ai/) — free tier for TTS
+Every provider id can be overridden with an environment variable (`GROQ_MODEL`, `GEMINI_MODEL`, ...), so a retired model id is a one line change, not a code change.
+
+**Indic languages:** [Sarvam AI](https://www.sarvam.ai/) — free tier for TTS (`bulbul:v3`, or `bulbul:v4-flash` for styled voices, pitch and pronunciation dictionaries)
 
 Keys saved locally in `voice-service/user_config.json`. Never sent to our servers.
 

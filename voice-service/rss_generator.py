@@ -2,7 +2,7 @@ import os
 import json
 from datetime import datetime
 from xml.sax.saxutils import escape
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 
 
 def seconds_to_hms(total_seconds: int) -> str:
@@ -16,8 +16,22 @@ def seconds_to_hms(total_seconds: int) -> str:
     return f"{minutes:02d}:{seconds:02d}"
 
 
-def generate_podcast_rss(output_dir: str, base_url: str = "http://localhost:9876") -> str:
-    """Generate a podcast RSS 2.0 feed with <enclosure> tags for each .wav file."""
+def generate_podcast_rss(
+    output_dir: str,
+    base_url: str = "http://localhost:9876",
+    channel_title: str = "Podcast Brain Pro",
+    channel_description: str = "AI generated podcasts, rendered locally",
+    channel_author: str = "Podcast Brain Pro",
+    channel_language: str = "en-us",
+    channel_category: str = "Technology",
+    explicit: bool = False,
+) -> str:
+    """Generate a podcast RSS 2.0 feed with <enclosure> tags for each episode.
+
+    Episodes are the ``.wav`` files in ``output_dir``. When a transcript sidecar exists
+    next to an episode, a Podcasting 2.0 ``<podcast:transcript>`` element is emitted so
+    the feed is usable by hosts that support it.
+    """
     files = []
     for f in os.listdir(output_dir):
         if f.endswith(".wav"):
@@ -56,29 +70,38 @@ def generate_podcast_rss(output_dir: str, base_url: str = "http://localhost:9876
 
         duration_hms = seconds_to_hms(duration_sec)
 
+        transcript_tag = ""
+        transcript_path = os.path.splitext(f["path"])[0] + ".transcript.json"
+        if os.path.exists(transcript_path):
+            transcript_url = f"{base_url}/outputs/{os.path.basename(transcript_path)}"
+            transcript_tag = (
+                f'\n      <podcast:transcript url="{escape(transcript_url)}" '
+                f'type="application/json" rel="captions"/>'
+            )
+
         item = f"""    <item>
       <title>{escape(str(title))}</title>
       <description>{escape(str(description))}</description>
       <pubDate>{pub_date}</pubDate>
       <enclosure url="{escape(enclosure_url)}" length="{f['size_bytes']}" type="audio/wav"/>
       <itunes:duration>{duration_hms}</itunes:duration>
-      <guid>{escape(enclosure_url)}</guid>
+      <itunes:episodeType>full</itunes:episodeType>
+      <itunes:explicit>{'true' if explicit else 'false'}</itunes:explicit>
+      <guid>{escape(enclosure_url)}</guid>{transcript_tag}
     </item>"""
         items.append(item)
 
     items_xml = "\n".join(items)
 
     rss = f"""<?xml version="1.0" encoding="UTF-8"?>
-<rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" version="2.0">
+<rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:podcast="https://podcastindex.org/namespace/1.0" version="2.0">
   <channel>
-    <title>AI_VOICEVIBE Podcast</title>
-    <description>AI-generated podcasts powered by Microsoft VibeVoice</description>
-    <language>en-us</language>
-    <itunes:author>AI_VOICEVIBE</itunes:author>
-    <itunes:category text="Technology"/>
-    <itunes:image href="https://via.placeholder.com/1400x1400.png?text=AI_VOICEVIBE+Podcast"/>
-    <link>{base_url}</link>
-{items_xml}
+    <title>{escape(channel_title)}</title>
+    <description>{escape(channel_description)}</description>
+    <language>{escape(channel_language)}</language>
+    <itunes:author>{escape(channel_author)}</itunes:author>
+    <itunes:category text="{escape(channel_category)}"/>
+    <link>{escape(base_url)}</link>{items_xml}
   </channel>
 </rss>"""
     return rss
