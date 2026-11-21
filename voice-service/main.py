@@ -88,7 +88,6 @@ except Exception:
     psutil = None
 
 import torch
-import numpy as np
 import requests
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -113,12 +112,13 @@ from script_pipeline import (
     speaker_order,
     split_sentences,
     split_units,
+    style_cfg_multiplier,
     style_names,
     style_params,
-    strip_directives,
     turn_content,
     turn_speaker,
     units_to_script_lines,
+    voice_paths_by_id,
 )
 
 # ============== VibeVoice imports ==============
@@ -144,10 +144,16 @@ _tts_generation_lock = threading.Lock()
 _mps_clear_active = threading.Event()
 _mps_clear_thread: Optional[threading.Thread] = None
 
+_mps_clear_stop = threading.Event()
+
 def _periodic_mps_cache_clear(interval_sec: int = 45):
-    """Background thread that clears MPS cache every N seconds during active generation."""
-    while _mps_clear_active.is_set():
-        if _mps_clear_active.wait(timeout=interval_sec):
+    """Clear the MPS cache every N seconds while a generation is running.
+
+    Waiting on the *active* event used to return immediately, so the thread exited on
+    its first iteration and the cache was never cleared on a timer.
+    """
+    while _mps_clear_active.is_set() and not _mps_clear_stop.is_set():
+        if _mps_clear_stop.wait(timeout=interval_sec):
             break
         if DEVICE == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             try:
@@ -162,13 +168,15 @@ def start_mps_cache_clear():
         return
     if _mps_clear_thread is not None and _mps_clear_thread.is_alive():
         return
+    _mps_clear_stop.clear()
     _mps_clear_active.set()
     _mps_clear_thread = threading.Thread(target=_periodic_mps_cache_clear, daemon=True)
     _mps_clear_thread.start()
 
 def stop_mps_cache_clear():
-    """Stop the periodic MPS cache cleaner."""
+    """Stop the periodic MPS cache cleaner and let its thread exit."""
     _mps_clear_active.clear()
+    _mps_clear_stop.set()
 
 # ============== Model cache detection ==============
 HF_HUB_CACHE = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
@@ -232,6 +240,13 @@ def get_device():
 
 DEVICE = get_device()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Read voice-service/.env before any environment-derived constant below. The setup
+# guide tells users to put their keys in that file; without this it was ignored.
+from env_loader import load_env_file
+
+load_env_file(os.path.join(BASE_DIR, ".env"))
+
 CONFIG_PATH = os.path.join(BASE_DIR, "user_config.json")
 
 # Configurable paths (env vars override defaults)
@@ -276,17 +291,47 @@ def log_audio_event(level: str, message: str, extra: Optional[Dict[str, Any]] = 
 
 # ============== User Config (API Keys) ==============
 
+_config_cache: Dict[str, Any] = {"mtime": None, "data": {}}
+
 def get_config() -> Dict[str, str]:
-    if os.path.exists(CONFIG_PATH):
-        try:
-            with open(CONFIG_PATH, "r") as f:
-                data = json.load(f)
-                if isinstance(data, dict):
-                    return data
-                return {}
-        except Exception:
-            return {}
-    return {}
+    """Read user_config.json, cached on the file's modification time.
+
+    A parse failure is logged, not swallowed: silently returning {} is how a truncated
+    file used to make every provider look unconfigured.
+    """
+    try:
+        mtime = os.path.getmtime(CONFIG_PATH)
+    except OSError:
+        _config_cache["mtime"] = None
+        _config_cache["data"] = {}
+        return {}
+
+    if _config_cache["mtime"] == mtime:
+        return dict(_config_cache["data"])
+
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            data = json.load(f)
+    except Exception as e:
+        logger.error("Could not parse %s: %s", CONFIG_PATH, e)
+        return {}
+
+    if not isinstance(data, dict):
+        logger.error("%s does not contain a JSON object", CONFIG_PATH)
+        return {}
+
+    _config_cache["mtime"] = mtime
+    _config_cache["data"] = data
+    return dict(data)
+
+def write_config(cfg: Dict[str, str]) -> None:
+    """Write the key file atomically, readable only by this user."""
+    tmp_path = CONFIG_PATH + ".tmp"
+    descriptor = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w") as handle:
+        json.dump(cfg, handle, indent=2)
+    os.replace(tmp_path, CONFIG_PATH)
+    _config_cache["mtime"] = None  # force a re-read
 
 def get_api_key(name: str) -> str:
     """Read API key from environment first, then user config file."""
@@ -322,6 +367,7 @@ class TTSRealtimeRequest(BaseModel):
     topic: Optional[str] = None
     format: Optional[str] = "monologue"
     language: Optional[str] = "en"
+    style: Optional[str] = None  # episode wide delivery style, directives can override
 
 class TTSLongformRequest(BaseModel):
     script: List[Dict[str, Any]] = Field(..., min_length=1)  # [{"speaker": "Host", "content": "Hello"}]
@@ -367,6 +413,8 @@ class PodcastScriptResponse(BaseModel):
     script: List[Dict[str, str]]
     word_count: int
     generation_time_seconds: float
+    target_words: Optional[int] = None
+    under_target: Optional[bool] = None
 
 class SarvamTTSRequest(BaseModel):
     text: str = Field(..., min_length=1)
@@ -542,6 +590,9 @@ def _finalize_audio(audio_bytes: bytes, metadata: Optional[Dict[str, Any]] = Non
     """
     normalized = normalize_loudness(audio_bytes, enabled=LOUDNESS_NORMALIZATION)
     if metadata is not None:
+        # Record whether the export was really normalised: a missing ffmpeg used to
+        # pass silently and publish whatever level the model produced.
+        metadata["loudness_normalised"] = normalized is not audio_bytes
         measurement = measure_loudness(normalized)
         if measurement:
             metadata["loudness"] = measurement
@@ -560,7 +611,13 @@ def _save_transcript_sidecar(
     if not saved_filename:
         return None
     try:
-        base = os.path.splitext(saved_filename)[0]
+        # save_to_outputs returns a bare filename, so anchor it in OUTPUT_DIR. Writing
+        # it relative to the process working directory is what put the transcript in
+        # voice-service/ and left the RSS feed without a transcript element.
+        audio_path = saved_filename
+        if not os.path.isabs(audio_path):
+            audio_path = os.path.join(OUTPUT_DIR, saved_filename)
+        base = os.path.splitext(audio_path)[0]
         path = f"{base}.transcript.json"
         payload = {
             "title": metadata.get("topic") or os.path.basename(base),
@@ -582,15 +639,14 @@ def _save_transcript_sidecar(
         logger.warning("Could not write transcript sidecar: %s", e)
         return None
 
-def save_to_outputs(audio_bytes: bytes, prefix: str = "podcast", metadata: Optional[Dict[str, Any]] = None) -> str:
-    """Save audio bytes to outputs directory with timestamp.
-    
-    If metadata contains a non-empty topic, the filename becomes:
-      podcast_{sanitized_topic}_{timestamp}.wav
-    Otherwise falls back to:
-      {prefix}_{timestamp}.wav
+def save_to_outputs(audio_bytes: bytes, prefix: str = "podcast", metadata: Optional[Dict[str, Any]] = None, subdirectory: str = "") -> str:
+    """Save audio bytes to the outputs directory with a timestamp.
+
+    ``subdirectory`` keeps one-shot previews out of the episode library and the RSS
+    feed: those scan only the top level of the outputs directory.
     """
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    target_dir = os.path.join(OUTPUT_DIR, subdirectory) if subdirectory else OUTPUT_DIR
+    os.makedirs(target_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
     topic = ""
     if metadata:
@@ -607,23 +663,29 @@ def save_to_outputs(audio_bytes: bytes, prefix: str = "podcast", metadata: Optio
         filename = f"podcast_{safe_topic}_{timestamp}.wav"
     else:
         filename = f"{prefix}_{timestamp}.wav"
-    path = os.path.join(OUTPUT_DIR, filename)
+    path = os.path.join(target_dir, filename)
     with open(path, "wb") as f:
         f.write(audio_bytes)
 
-    # Calculate actual audio duration from WAV header
+    # Duration comes from the WAV that was actually written. If the header cannot be
+    # parsed, estimate from the byte count (24 kHz mono 16-bit = 48000 B/s) and say so
+    # in the log rather than silently recording 0.0.
     duration_seconds = 0.0
     try:
         with io.BytesIO(audio_bytes) as bio:
             rate, data = wavfile.read(bio)
             duration_seconds = float(len(data)) / float(rate)
-    except Exception:
-        pass
+    except Exception as e:
+        duration_seconds = len(audio_bytes) / 48000.0
+        logger.warning("Could not read the WAV header for %s (%s); estimated duration", filename, e)
 
     if metadata:
         meta_path = os.path.splitext(path)[0] + ".json"
         meta_payload = {
             "created_at": datetime.now().isoformat(),
+            # A stable identity for the RSS guid: renaming the file must not make a
+            # podcast client treat the episode as new.
+            "episode_id": metadata.get("episode_id") or str(uuid.uuid4()),
             "duration_seconds": round(duration_seconds, 2),
             **metadata,
         }
@@ -633,7 +695,7 @@ def save_to_outputs(audio_bytes: bytes, prefix: str = "podcast", metadata: Optio
         except Exception as e:
             print(f"Failed to write metadata: {e}")
 
-    return filename
+    return os.path.join(subdirectory, filename) if subdirectory else filename
 
 def tavily_research(topic: str) -> str:
     """Get deep research summary from Tavily."""
@@ -717,7 +779,11 @@ def groq_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperature
                 time.sleep(wait)
                 continue
             raise
-    raise HTTPException(status_code=429, detail=f"Groq API rate-limited after retries: {last_exception}")
+    # Report the real failure class: a 5xx after retries is not a rate limit.
+    final_status = getattr(getattr(last_exception, "response", None), "status_code", 0)
+    if final_status == 429:
+        raise HTTPException(status_code=429, detail=f"Groq API rate-limited after retries: {last_exception}")
+    raise HTTPException(status_code=503, detail=f"Groq API unavailable after retries: {last_exception}")
 
 def deepseek_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperature: float = 0.7) -> str:
     """Call DeepSeek API (OpenAI-compatible)."""
@@ -917,12 +983,19 @@ def llm_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperature:
             if i > 0:
                 print(f"[llm fallback] {providers[i-1][0]} failed, trying {name}...")
             return fn(messages, max_tokens=max_tokens, temperature=temperature)
-        except Exception as e:
-            detail = str(e)
-            if hasattr(e, "detail"):
-                detail = e.detail
+        except (requests.RequestException, HTTPException, KeyError, IndexError, ValueError) as e:
+            # Only provider failures belong in the fallback chain. A TypeError in our
+            # own code must surface as a 500, not as eight "provider" failures.
+            detail = getattr(e, "detail", None) or str(e)
             errors.append(f"{name}: {detail}")
-    raise HTTPException(status_code=429, detail=f"All LLM providers failed: {' | '.join(errors)}")
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            "No LLM provider could write the script. Configure at least one provider "
+            "key in Settings, or run a local Ollama model. "
+            f"Attempts: {' | '.join(errors)}"
+        ),
+    )
 
 def _delivery_instructions(style: Optional[str]) -> str:
     """Prompt block that tells the scriptwriter how to mark delivery.
@@ -941,14 +1014,25 @@ Delivery directions, written inline where they belong:
     return rules
 
 def parse_conversation_script(raw_text: str, speakers: List[str]) -> List[Dict[str, str]]:
-    """Parse raw conversation text into structured script array."""
+    """Parse raw conversation text into a structured script array.
+
+    Two traps are handled explicitly:
+    - longer names are matched first, so "Guest A" is not read as "Guest";
+    - a line that starts with a name the cast does not contain is dropped and counted,
+      not silently appended to the previous speaker's turn.
+    """
     script = []
     lines = raw_text.strip().split('\n')
-    speaker_pattern = re.compile(rf'^({"|".join(re.escape(s) for s in speakers)})\s*[:\-]\s*(.*)$', re.IGNORECASE)
-    
+    ordered = sorted(speakers, key=len, reverse=True)
+    speaker_pattern = re.compile(
+        rf'^({"|".join(re.escape(s) for s in ordered)})\s*[:\-]\s*(.*)$', re.IGNORECASE
+    )
+    unknown_prefix = re.compile(r"^([A-Za-z][A-Za-z0-9 _.'-]{0,40})\s*[:\-]\s+")
+    dropped_lines = 0
+
     current_speaker = None
     current_content = ""
-    
+
     for line in lines:
         line = line.strip()
         if not line:
@@ -957,20 +1041,26 @@ def parse_conversation_script(raw_text: str, speakers: List[str]) -> List[Dict[s
         if match:
             if current_speaker and current_content:
                 script.append({"speaker": current_speaker, "content": current_content.strip()})
-            # Find the canonical speaker name
             spoken_name = match.group(1)
             canonical = next((s for s in speakers if s.lower() == spoken_name.lower()), speakers[0])
             current_speaker = canonical
             current_content = match.group(2)
+        elif unknown_prefix.match(line):
+            # Looks like "Somebody: text" for a speaker we do not have. Attributing it
+            # to the previous host would quietly corrupt the script.
+            dropped_lines += 1
+            logger.warning("Dropping a line from an unknown speaker: %s", line[:60])
         else:
             if current_content:
                 current_content += " " + line
             else:
                 current_content = line
-    
+
     if current_speaker and current_content:
         script.append({"speaker": current_speaker, "content": current_content.strip()})
-    
+
+    if dropped_lines:
+        logger.warning("Dropped %d line(s) from unknown speakers", dropped_lines)
     return script
 
 def build_speaker_list(format_type: str, speakers: Optional[List[str]]) -> List[str]:
@@ -1012,7 +1102,9 @@ async def lifespan(app: FastAPI):
             pass
 
 STATIC_DIR = os.path.join(BASE_DIR, "static")
-OUTPUTS_DIR = os.path.join(BASE_DIR, "outputs")
+# The static mount must serve the same directory the writers use, otherwise setting
+# OUTPUT_DIR makes every saved episode unreachable.
+OUTPUTS_DIR = OUTPUT_DIR
 
 # Ensure outputs directory exists for static file serving
 os.makedirs(OUTPUTS_DIR, exist_ok=True)
@@ -1199,21 +1291,33 @@ async def post_config_endpoint(request: Request):
         "OPENROUTER_API_KEY",
     ]
     cfg = get_config()
-    updated = False
+    saved: List[str] = []
+    removed: List[str] = []
+    invalid: List[str] = []
     for k in allowed:
-        if k in req:
-            v = req[k]
-            if isinstance(v, str) and v.strip():
-                cfg[k] = v.strip()
-                updated = True
-            elif v is None or (isinstance(v, str) and not v.strip()):
-                if k in cfg:
-                    del cfg[k]
-                    updated = True
-    if updated:
-        with open(CONFIG_PATH, "w") as f:
-            json.dump(cfg, f, indent=2)
-    return {"status": "ok", "updated": updated}
+        if k not in req:
+            continue
+        v = req[k]
+        if isinstance(v, str) and v.strip():
+            cfg[k] = v.strip()
+            saved.append(k)
+        elif v is None or (isinstance(v, str) and not v.strip()):
+            if k in cfg:
+                del cfg[k]
+                removed.append(k)
+        else:
+            # A number, list or object is a client error, not a silent no-op.
+            invalid.append(k)
+
+    if invalid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"These keys must be a string or null: {', '.join(invalid)}",
+        )
+
+    if saved or removed:
+        write_config(cfg)
+    return {"status": "ok", "updated": bool(saved or removed), "saved": saved, "removed": removed}
 
 # ============== Safety Limits ==============
 # Longform 1.5B on MPS with float32 consumes ~23GB+ RAM for large inputs.
@@ -1229,14 +1333,23 @@ def get_max_longform_words() -> int:
 # Chunking, sentence splitting and voice assignment live in script_pipeline so the
 # generator, the longform path and the realtime path cannot drift apart.
 
+_mps_cleanup_calls = 0
+
 def _mps_cleanup():
-    """Explicitly clear MPS cache and run GC. Critical for 24GB Macs."""
+    """Clear the MPS cache, and run a full GC only occasionally.
+
+    gc.collect() is a stop-the-world collection over the whole heap; running it after
+    every segment costs seconds on a large model for no measurable benefit.
+    """
+    global _mps_cleanup_calls
     if DEVICE == "mps":
         try:
             torch.mps.empty_cache()
         except Exception:
             pass
-        gc.collect()
+        _mps_cleanup_calls += 1
+        if _mps_cleanup_calls % 4 == 0:
+            gc.collect()
 
 def _generate_longform_chunk(
     processor, model,
@@ -1335,7 +1448,7 @@ def _stitch_wav_bytes(chunks: List[bytes], silence_ms: int = 300, gaps_ms: Optio
 
 # ============== TTS Endpoints ==============
 
-def _do_tts_realtime_sync(text: str, speaker_name: Optional[str], cfg_scale: Optional[float], save_to_disk: Optional[bool], topic: Optional[str], format: Optional[str], language: Optional[str]) -> tuple:
+def _do_tts_realtime_sync(text: str, speaker_name: Optional[str], cfg_scale: Optional[float], save_to_disk: Optional[bool], topic: Optional[str], format: Optional[str], language: Optional[str], style: Optional[str] = None) -> tuple:
     """Synchronous helper for realtime TTS. Runs inside a thread pool.
     Returns (audio_bytes, saved_filename)."""
     processor, model = load_realtime_tts()
@@ -1348,8 +1461,12 @@ def _do_tts_realtime_sync(text: str, speaker_name: Optional[str], cfg_scale: Opt
         raise HTTPException(status_code=500, detail="No voice presets found")
 
     assignment, _warnings = resolve_voices([speaker_name], voices)
-    voice_id = assignment.get(speaker_name, voices[0]["id"])
+    # An unknown speaker must not fall back to the alphabetically first voice file,
+    # which can be a different language altogether. Prefer an English preset.
+    default_voice = next((v for v in voices if v["language"] == "en"), voices[0])
+    voice_id = assignment.get(speaker_name, default_voice["id"])
     voice_path = next(voice["path"] for voice in voices if voice["id"] == voice_id)
+    logger.info("Realtime voice for %r: %s", speaker_name, voice_id)
 
     target_device = DEVICE if DEVICE != "cpu" else "cpu"
     all_prefilled_outputs = torch.load(voice_path, map_location=target_device, weights_only=False)
@@ -1403,14 +1520,14 @@ def _do_tts_realtime_sync(text: str, speaker_name: Optional[str], cfg_scale: Opt
             _mps_cleanup()
 
     # Delivery directives split the text into stretches separated by pauses.
-    units = split_units(text)
+    units = split_units(text, default_style=style or DEFAULT_STYLE)
     if not units:
         raise HTTPException(status_code=400, detail="text is empty")
 
     audios: List[bytes] = []
     gaps_ms: List[int] = []
     for unit in units:
-        unit_cfg = cfg_scale if unit["style"] == DEFAULT_STYLE else style_params(unit["style"])["cfg_scale"]
+        unit_cfg = cfg_scale * style_cfg_multiplier(unit["style"])
         audios.append(synth(unit["text"], unit_cfg))
         gaps_ms.append(int(round((unit.get("pause_after") or 0.0) * 1000)))
 
@@ -1437,7 +1554,7 @@ async def tts_realtime(req: TTSRealtimeRequest):
         loop = asyncio.get_event_loop()
         audio_bytes, saved_filename = await loop.run_in_executor(
             _tts_executor, _do_tts_realtime_sync,
-            req.text, req.speaker_name, req.cfg_scale, req.save_to_disk, req.topic, req.format, req.language
+            req.text, req.speaker_name, req.cfg_scale, req.save_to_disk, req.topic, req.format, req.language, req.style
         )
         headers = {"X-Saved-Filename": saved_filename} if saved_filename else {}
         return StreamingResponse(io.BytesIO(audio_bytes), media_type="audio/wav", headers=headers)
@@ -1533,7 +1650,7 @@ async def tts_with_engine(req: EngineTTSRequest):
 
     saved_filename = None
     if req.save_to_disk:
-        saved_filename = save_to_outputs(audio_bytes, prefix=f"podcast_{req.engine}", metadata=meta)
+        saved_filename = save_to_outputs(audio_bytes, prefix=f"podcast_{req.engine}", metadata=meta, subdirectory="previews")
 
     headers = {"X-Saved-Filename": saved_filename} if saved_filename else {}
     return StreamingResponse(io.BytesIO(audio_bytes), media_type="audio/wav", headers=headers)
@@ -1622,7 +1739,7 @@ async def tts_clone(
 
     saved_filename = None
     if save_to_disk:
-        saved_filename = save_to_outputs(audio_bytes, prefix="podcast_clone", metadata=meta)
+        saved_filename = save_to_outputs(audio_bytes, prefix="podcast_clone", metadata=meta, subdirectory="previews")
 
     headers = {"X-Saved-Filename": saved_filename} if saved_filename else {}
     return StreamingResponse(io.BytesIO(audio_bytes), media_type="audio/wav", headers=headers)
@@ -1651,8 +1768,7 @@ def _do_tts_longform_sync(
     for warning in voice_warnings:
         log_audio_event("warning", "LONGFORM_VOICE_WARNING", extra={"detail": warning}, req_id=req_id)
 
-    voice_paths = {voice["id"]: voice["path"] for voice in voices}
-    voice_samples = [voice_paths[assignment[name]] for name in speakers if name in assignment]
+    voice_samples = voice_paths_by_id(assignment, voices)
     if not voice_samples:
         raise HTTPException(
             status_code=500, detail="no voice files found in the longform voices directory"
@@ -1678,7 +1794,7 @@ def _do_tts_longform_sync(
         for idx, segment in enumerate(segments):
             segment_words = sum(len(unit["text"].split()) for unit in segment)
             style = segment[0]["style"]
-            cfg = base_cfg if style == DEFAULT_STYLE else style_params(style)["cfg_scale"]
+            cfg = base_cfg * style_cfg_multiplier(style)
             segment_t0 = time.time()
             log_audio_event("info", f"LONGFORM_SEGMENT_{idx+1}_START",
                             extra={"segment_words": segment_words, "segment_idx": idx + 1,
@@ -1872,7 +1988,14 @@ async def _tts_local_fallback(text: str, speaker: str, save_to_disk: bool = Fals
     audio_bytes, saved_filename = await loop.run_in_executor(
         _tts_executor, _do_tts_local_fallback_sync, text, speaker, save_to_disk, topic
     )
-    headers = {"X-Saved-Filename": saved_filename} if saved_filename else {}
+    # Tell the client this is NOT Sarvam output: an Indian-language request that fell
+    # back to a local English voice must never look like a successful Indic render.
+    headers = {
+        "X-TTS-Provider": "vibevoice-local-fallback",
+        "X-Language-Fallback": "true",
+    }
+    if saved_filename:
+        headers["X-Saved-Filename"] = saved_filename
     return StreamingResponse(io.BytesIO(audio_bytes), media_type="audio/wav", headers=headers)
 
 @app.post("/tts/sarvam")
@@ -2002,7 +2125,9 @@ async def tts_sarvam(req: SarvamTTSRequest):
             "mulaw": "audio/mulaw", "alaw": "audio/alaw"
         }
         mime = codec_to_mime.get(req.output_audio_codec, "audio/wav")
-        headers = {"X-Saved-Filename": saved_filename} if saved_filename else {}
+        headers = {"X-TTS-Provider": "sarvam"}
+        if saved_filename:
+            headers["X-Saved-Filename"] = saved_filename
         return StreamingResponse(io.BytesIO(audio_bytes), media_type=mime, headers=headers)
     except HTTPException:
         raise
@@ -2175,6 +2300,10 @@ Now write the complete script."""
             "format": req.format,
             "script": script,
             "word_count": word_count,
+            # Let the caller see that a "30 minute" request produced a two minute
+            # script instead of silently accepting it.
+            "target_words": target_words,
+            "under_target": word_count < target_words * 0.6,
             "generation_time_seconds": gen_time,
         }
     except Exception as e:
@@ -2213,6 +2342,10 @@ async def podcast_history(limit: int = Query(default=20, ge=1, le=100)):
                             entry["language"] = metadata["language"]
                         if metadata.get("provider"):
                             entry["provider"] = metadata["provider"]
+                        if metadata.get("engine"):
+                            entry["engine"] = metadata["engine"]
+                        if metadata.get("loudness"):
+                            entry["loudness"] = metadata["loudness"]
                         if metadata.get("duration_seconds"):
                             entry["duration_seconds"] = metadata["duration_seconds"]
                     except Exception:
@@ -2251,11 +2384,14 @@ async def podcast_rename(payload: RenameRequest):
 
         os.rename(old_path, new_path)
 
-        # Rename metadata if present
-        old_meta = old_path.replace(".wav", ".json")
-        new_meta = new_path.replace(".wav", ".json")
-        if os.path.exists(old_meta):
-            os.rename(old_meta, new_meta)
+        # Move the sidecars too: splitext, not str.replace, so a topic containing
+        # "wav" cannot mangle the metadata filename.
+        old_base = os.path.splitext(old_path)[0]
+        new_base = os.path.splitext(new_path)[0]
+        for suffix in (".json", ".transcript.json"):
+            old_sidecar = old_base + suffix
+            if os.path.exists(old_sidecar):
+                os.rename(old_sidecar, new_base + suffix)
 
         stat = os.stat(new_path)
         return {
@@ -2279,16 +2415,22 @@ async def podcast_delete(filename: str = Query(...)):
             raise HTTPException(status_code=400, detail="Invalid filename")
 
         wav_path = os.path.join(OUTPUT_DIR, name)
-        meta_path = wav_path.replace(".wav", ".json")
+        base_path = os.path.splitext(wav_path)[0]
 
         if not os.path.exists(wav_path):
             raise HTTPException(status_code=404, detail="File not found")
 
         os.unlink(wav_path)
-        if os.path.exists(meta_path):
-            os.unlink(meta_path)
+        # Remove the metadata and the transcript sidecar as well, otherwise the feed
+        # keeps advertising files that no longer exist.
+        removed_sidecars = []
+        for suffix in (".json", ".transcript.json"):
+            sidecar = base_path + suffix
+            if os.path.exists(sidecar):
+                os.unlink(sidecar)
+                removed_sidecars.append(os.path.basename(sidecar))
 
-        return {"deleted": name}
+        return {"deleted": name, "sidecars": removed_sidecars}
     except HTTPException:
         raise
     except Exception as e:
@@ -2304,7 +2446,7 @@ async def podcast_feed():
     try:
         rss_xml = generate_podcast_rss(
             OUTPUT_DIR,
-            base_url=os.environ.get("PUBLIC_BASE_URL", "http://localhost:9876").rstrip("/"),
+            base_url=os.environ.get("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/"),
             channel_title=os.environ.get("PODCAST_TITLE", "Podcast Brain Pro"),
             channel_description=os.environ.get(
                 "PODCAST_DESCRIPTION", "AI generated podcasts, rendered locally"
@@ -2312,6 +2454,8 @@ async def podcast_feed():
             channel_author=os.environ.get("PODCAST_AUTHOR", "Podcast Brain Pro"),
             channel_language=os.environ.get("PODCAST_LANGUAGE", "en-us"),
             channel_category=os.environ.get("PODCAST_CATEGORY", "Technology"),
+            channel_image=os.environ.get("PODCAST_IMAGE_URL", ""),
+            channel_email=os.environ.get("PODCAST_EMAIL", ""),
         )
         return Response(content=rss_xml, media_type="application/rss+xml; charset=utf-8")
     except Exception as e:
@@ -2319,18 +2463,21 @@ async def podcast_feed():
 
 def _do_asr_sync(tmp_path: str, language: str) -> dict:
     """Synchronous helper for ASR transcription. Runs inside a thread pool."""
-    processor, model = models["asr"]
-    
+    loaded = models.get("asr")
+    if loaded is None:
+        raise HTTPException(status_code=503, detail="The ASR model is not loaded.")
+    processor, model = loaded
+
     inputs = processor(audio=tmp_path, sampling_rate=None, return_tensors="pt", padding=True, add_generation_prompt=True)
     inputs = {k: v.to(DEVICE) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
-    
+
+    # Transcription must be deterministic. do_sample=True with temperature=0.0 is
+    # rejected by transformers and would be wrong for ASR anyway.
     generation_config = {
         "max_new_tokens": 512,
         "pad_token_id": processor.pad_id,
         "eos_token_id": processor.tokenizer.eos_token_id,
-        "do_sample": True,
-        "temperature": 0.0,
-        "top_p": 1.0,
+        "do_sample": False,
     }
     
     try:
@@ -2372,11 +2519,16 @@ async def asr_transcribe(
     language: Optional[str] = Form("en"),
 ):
     if not asr_ready.is_set():
-        raise HTTPException(
-            status_code=503,
-            detail="ASR model is still loading. Please retry shortly.",
-            headers={"Retry-After": "30"},
-        )
+        # Load on first use, like the TTS models do. With ASR_PRELOAD_AT_STARTUP=false
+        # the endpoint used to return 503 forever and never trigger a load.
+        logger.info("ASR requested before preload; loading the model now")
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(_tts_executor, load_asr)
+        if not asr_ready.is_set():
+            raise HTTPException(
+                status_code=503,
+                detail="The ASR model could not be loaded. Check the server log.",
+            )
     
     # File size limit: 50MB to prevent OOM
     MAX_ASR_SIZE = 50 * 1024 * 1024

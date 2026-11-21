@@ -274,7 +274,8 @@ export function useStudio() {
       const data = await res.json();
       if (runId !== scriptRunIdRef.current) return;
       setScript(data.script);
-      setScriptStats(`${data.word_count} words · ${data.generation_time_seconds}s`);
+      const shortNote = data.under_target ? " · shorter than requested" : "";
+      setScriptStats(`${data.word_count} words · ${data.generation_time_seconds}s${shortNote}`);
     } catch (error) {
       if (runId !== scriptRunIdRef.current) return;
       if (isAbortError(error)) {

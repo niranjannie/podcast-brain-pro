@@ -190,10 +190,6 @@ def list_engines() -> List[Dict[str, Any]]:
     return [spec.describe() for spec in ENGINES.values()]
 
 
-def cloning_engines() -> List[Dict[str, Any]]:
-    return [engine for engine in list_engines() if engine["cloning"]]
-
-
 def get_engine(engine_id: str) -> EngineSpec:
     spec = ENGINES.get(engine_id)
     if spec is None:

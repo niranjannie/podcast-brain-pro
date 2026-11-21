@@ -50,6 +50,16 @@ def style_names() -> List[str]:
     return sorted(STYLE_PRESETS)
 
 
+def style_cfg_multiplier(style: Optional[str]) -> float:
+    """How far a style shifts the guidance scale, relative to neutral.
+
+    A style is a nudge on the caller's own cfg_scale, never a replacement for it:
+    an explicit cfg_scale in the request must still mean something when a script
+    contains a style marker.
+    """
+    return style_params(style)["cfg_scale"] / STYLE_PRESETS[DEFAULT_STYLE]["cfg_scale"]
+
+
 # ============== Turn normalisation ==============
 
 def turn_speaker(item: Dict[str, Any], default: str = "Speaker") -> str:
@@ -233,32 +243,6 @@ def group_units(units: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
         else:
             grouped.append(dict(unit))
     return grouped
-
-
-def chunk_units(
-    grouped: Sequence[Dict[str, Any]], max_words: int
-) -> List[List[Dict[str, Any]]]:
-    """Split grouped units into chunks of at most ``max_words`` spoken words.
-
-    Splitting happens at unit boundaries, so a speaker never changes mid-chunk.
-    """
-    max_words = max(1, int(max_words))
-    chunks: List[List[Dict[str, Any]]] = []
-    current: List[Dict[str, Any]] = []
-    current_words = 0
-
-    for unit in grouped:
-        words = len(unit["text"].split())
-        if current and current_words + words > max_words:
-            chunks.append(current)
-            current = []
-            current_words = 0
-        current.append(unit)
-        current_words += words
-
-    if current:
-        chunks.append(current)
-    return chunks
 
 
 def units_to_script_lines(chunk: Sequence[Dict[str, Any]]) -> str:

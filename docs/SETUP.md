@@ -113,21 +113,34 @@ Edit `.env` and add at least one script-generation provider:
 DIALOGRAM_API_KEY=your_dialogram_key
 
 # Optional fallbacks
-GITHUB_PERSONAL_ACCESS_TOKEN=your_github_token
 GROQ_API_KEY=your_groq_key
+DEEPSEEK_API_KEY=your_deepseek_key
+GEMINI_API_KEY=your_gemini_key
 ```
+
+GitHub Models is **not** an option any more: its inference API was retired on 30 July
+2026. For a key-free setup, run a local [Ollama](https://ollama.com/) model instead —
+the default is `qwen3:8b` and you can change it with `OLLAMA_MODEL`.
+
+The `.env` file is read by the app at startup, so putting keys here works both with
+`./start.sh` and with a direct `uvicorn` call. Real environment variables win over the
+file.
 
 You can also configure keys later via the web UI (Settings → API Keys).
 
 ### 5. Run the FastAPI backend
 
 ```bash
-uvicorn main:app --host 0.0.0.0 --port 8000
+uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
 The backend will be available at **http://localhost:8000**.
 
 > 💡 **Tip:** Use the included `start.sh` script to start the backend with one command: `./start.sh`. It auto-activates the virtual environment and uses the `PORT` environment variable (defaults to 8000).
+>
+> 🔒 **Bind to localhost.** The service has no authentication: `/config` returns masked keys and lets a client change them, and `/outputs` serves your episodes. `start.sh` binds `127.0.0.1` by default; only set `HOST=0.0.0.0` on a network you trust.
+>
+> 🎙️ **Publishing a feed?** Set `PUBLIC_BASE_URL` to a public address before submitting `/feed/podcast.rss` to a podcast host, and set `PODCAST_IMAGE_URL` and `PODCAST_EMAIL` — Apple requires channel artwork and an owner.
 
 ### 6. Run the React frontend (optional but recommended)
 

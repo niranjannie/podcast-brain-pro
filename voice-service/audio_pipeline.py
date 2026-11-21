@@ -7,6 +7,7 @@ model lands wherever it lands, so every export goes through the same normalisati
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from typing import Dict, Optional
@@ -77,14 +78,13 @@ def measure_loudness(audio_bytes: bytes) -> Optional[Dict[str, float]]:
     if len(summary) < 2:
         return None
 
+    # Parse with an explicit unit group. String rstrip() removes characters, not a
+    # suffix, so "-1.5 dBFS" lost its unit and the peak was silently dropped.
+    pattern = re.compile(r"([A-Za-z ]+):\s*(-?[0-9]+(?:\.[0-9]+)?)\s*(LUFS|dBFS|dBTP|LU)?")
     values: Dict[str, float] = {}
-    for line in summary[1].splitlines():
-        if ":" not in line:
-            continue
-        key, _, value = line.partition(":")
-        value = value.strip().rstrip(" LUFS").rstrip(" dBTP").strip()
+    for key, number, _unit in pattern.findall(summary[1]):
         try:
-            values[key.strip().lower()] = float(value)
+            values[key.strip().lower()] = float(number)
         except ValueError:
             continue
 
