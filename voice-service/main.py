@@ -524,6 +524,14 @@ LOUDNESS_NORMALIZATION = os.environ.get("NORMALIZE_LOUDNESS", "true").strip().lo
     "off",
 )
 
+# Expand a script that came out far short of the target length with a second pass.
+EXPAND_SHORT_SCRIPTS = os.environ.get("EXPAND_SHORT_SCRIPTS", "false").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+
 def _finalize_audio(audio_bytes: bytes, metadata: Optional[Dict[str, Any]] = None) -> bytes:
     """Normalise loudness for podcast delivery and record the measurement.
 
@@ -1437,23 +1445,24 @@ async def tts_realtime(req: TTSRealtimeRequest):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-def _do_tts_longform_sync(req: TTSLongformRequest, max_words: int, req_id: str) -> tuple:
+def _do_tts_longform_sync(
+    req: TTSLongformRequest,
+    turns: List[Dict[str, str]],
+    max_words: int,
+    req_id: str,
+) -> tuple:
     """Synchronous helper that performs the actual longform TTS generation.
     Runs inside a thread pool so the asyncio event loop stays responsive."""
     t0 = time.time()
     audio_bytes = b""
     chunks_used = 0
-    
+
     log_audio_event("info", "LONGFORM_LOADING_MODEL", req_id=req_id)
     processor, model = load_longform_tts()
     load_time = round(time.time() - t0, 2)
     log_audio_event("info", "LONGFORM_MODEL_READY", extra={"load_time_sec": load_time}, req_id=req_id)
-    
-    # Resolve the script once: normalised turns, stable speaker ids, delivery units.
-    turns = normalize_turns(req.script)
-    if not turns:
-        raise HTTPException(status_code=400, detail="script is empty")
 
+    # The script was validated before the model was loaded, so it is usable here.
     speakers = speaker_order(turns)
     voices = list_voices(LONGFORM_VOICES_DIR)
     assignment, voice_warnings = resolve_voices(speakers, voices, req.voice_names)
@@ -1520,6 +1529,10 @@ def _do_tts_longform_sync(req: TTSLongformRequest, max_words: int, req_id: str) 
 async def tts_longform(req: TTSLongformRequest):
     req_id = get_request_id()
     turns = normalize_turns(req.script)
+    if not turns:
+        # Reject before the model is loaded: an empty script must not trigger a
+        # multi-gigabyte model download.
+        raise HTTPException(status_code=400, detail="script is empty")
     total_words = sum(len(turn["content"].split()) for turn in turns)
     total_chars = sum(len(turn["content"]) for turn in turns)
     max_words = get_max_longform_words()
@@ -1535,7 +1548,7 @@ async def tts_longform(req: TTSLongformRequest):
         # We use our custom executor (max 2 workers) to limit concurrent TTS jobs.
         loop = asyncio.get_event_loop()
         audio_bytes, chunks_used, gen_time = await loop.run_in_executor(
-            _tts_executor, _do_tts_longform_sync, req, max_words, req_id
+            _tts_executor, _do_tts_longform_sync, req, turns, max_words, req_id
         )
         
         meta = {
@@ -1858,9 +1871,14 @@ def podcast_generate(req: PodcastGenerateRequest):
         groq_max_tokens = int(max_tokens * 1.5) if is_indic else max_tokens
         
         def expand_script_if_needed(script_data, current_words):
-            """Fallback expansion if script is significantly shorter than target."""
-            # Skip expansion when using slow local fallback to avoid timeouts
-            return script_data, current_words
+            """Expand a script that came out far short of the target length.
+
+            Off by default: the extra round trip costs time on the free tier, and the
+            provider that answers first is often the one that under-writes. Turn it on
+            with EXPAND_SHORT_SCRIPTS=true when long Indic episodes need filling out.
+            """
+            if not EXPAND_SHORT_SCRIPTS or current_words >= target_words * 0.6:
+                return script_data, current_words
             print(f"[expand fallback] Script too short ({current_words}/{target_words} words). Expanding...")
             time.sleep(2.5)  # delay to avoid immediate back-to-back Groq calls
             if req.format == "monologue":

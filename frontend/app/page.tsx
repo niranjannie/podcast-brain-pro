@@ -28,6 +28,9 @@ import {
   Trash2,
   Filter,
   CheckCircle,
+  PauseCircle,
+  Rss,
+  FileJson,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -60,7 +63,18 @@ interface HistoryItem {
   language?: string;
   provider?: string;
   duration_seconds?: number;
+  loudness?: { integrated_lufs: number; true_peak_db: number };
 }
+
+interface VoiceInfo {
+  id: string;
+  language: string;
+  gender: string;
+  name: string;
+}
+
+const DELIVERY_STYLES = ["neutral", "calm", "narrative", "serious", "warm", "excited"] as const;
+type DeliveryStyle = (typeof DELIVERY_STYLES)[number];
 
 // ================= Config =================
 const DURATIONS = [2, 5, 10, 15, 30];
@@ -98,6 +112,16 @@ const SCRIPT_ESTIMATES: Record<number, string> = {
 };
 
 // ================= Helpers =================
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  return "Unknown error";
+}
+
+function isAbortError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "name" in error && error.name === "AbortError";
+}
+
 function getEngineBadge(lang: Language, format: Format, duration: number) {
   if (lang !== "en") return { label: "Sarvam Cloud", variant: "success" as const, time: "~30–90s" };
   if (format === "monologue" && duration <= 10) {
@@ -125,11 +149,19 @@ export default function Home() {
 
   const [speakerNames, setSpeakerNames] = useState(["Host", "Guest", "Expert"]);
   const [voiceSelections, setVoiceSelections] = useState<string[]>(["Carter", "Frank", "Alice"]);
+  const [deliveryStyle, setDeliveryStyle] = useState<DeliveryStyle>("neutral");
+  const [voices, setVoices] = useState<{ longform: VoiceInfo[]; streaming: VoiceInfo[]; styles: string[] }>({
+    longform: [],
+    streaming: [],
+    styles: [],
+  });
 
   // Script & audio state
   const [script, setScript] = useState<ScriptLine[] | null>(null);
   const [scriptStats, setScriptStats] = useState("");
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
+  const [scriptError, setScriptError] = useState<string | null>(null);
+  const [audioError, setAudioError] = useState<string | null>(null);
   const [editedLines, setEditedLines] = useState<Record<number, string>>({});
   const [hasEdits, setHasEdits] = useState(false);
 
@@ -138,7 +170,7 @@ export default function Home() {
   const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
   const [audioProgress, setAudioProgress] = useState(0);
   const [audioStatusText, setAudioStatusText] = useState("");
-  const audioTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const audioTimerRef = useRef<number | undefined>(undefined);
 
 
 
@@ -163,6 +195,7 @@ export default function Home() {
   const [renameValue, setRenameValue] = useState("");
   const [historyExpanded, setHistoryExpanded] = useState(true);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [historyFilterFormat, setHistoryFilterFormat] = useState<string>("all");
   const [historyFilterLanguage, setHistoryFilterLanguage] = useState<string>("all");
 
@@ -178,13 +211,28 @@ export default function Home() {
   const scriptLoadingRef = useRef<HTMLDivElement>(null);
   const waveformRef = useRef<HTMLDivElement>(null);
   const scriptAbortRef = useRef<AbortController | null>(null);
+  const audioAbortRef = useRef<AbortController | null>(null);
+  const scriptRunIdRef = useRef(0);
 
   // Derived
   const speakers = useMemo(() => getSpeakers(format, speakerNames), [format, speakerNames]);
   const engineInfo = useMemo(() => getEngineBadge(language, format, duration), [language, format, duration]);
   const isIndic = language !== "en";
   const usesLongform = isIndic || format !== "monologue" || duration > 10;
-  const availableVoices = isIndic ? SARVAM_VOICES : usesLongform ? LONGFORM_VOICES : REALTIME_VOICES;
+  const availableVoices = useMemo(() => {
+    if (isIndic) return SARVAM_VOICES;
+    const catalogue = (usesLongform ? voices.longform : voices.streaming).map((v) => v.id);
+    if (catalogue.length > 0) return catalogue;
+    return usesLongform ? LONGFORM_VOICES : REALTIME_VOICES;
+  }, [isIndic, usesLongform, voices]);
+
+  const voiceLabels = useMemo(() => {
+    const labels: Record<string, string> = {};
+    for (const voice of [...voices.longform, ...voices.streaming]) {
+      labels[voice.id] = `${voice.name} (${voice.gender})`;
+    }
+    return labels;
+  }, [voices]);
 
   // Model readiness for current selection
   const requiredModel = isIndic ? "sarvam" : usesLongform ? "longform" : "realtime";
@@ -207,8 +255,17 @@ export default function Home() {
     fetchConfig();
     loadHistory();
     fetchModelStatus();
+    fetchVoices();
     const interval = setInterval(fetchModelStatus, 10000); // poll every 10s
     return () => clearInterval(interval);
+  }, []);
+
+  // Stop any running audio job when the page goes away
+  useEffect(() => {
+    return () => {
+      audioAbortRef.current?.abort();
+      window.clearInterval(audioTimerRef.current);
+    };
   }, []);
 
   // Revoke blob URLs when audioUrl changes or on unmount
@@ -220,10 +277,35 @@ export default function Home() {
     };
   }, [audioUrl]);
 
-  // Reset voices when format/lang changes
+  // Reset voices when the cast or the engine changes, and never keep a voice that the
+  // current engine cannot render.
   useEffect(() => {
-    setVoiceSelections(speakers.map((_, i) => availableVoices[i % availableVoices.length]));
-  }, [format, language, speakers.length]);
+    setVoiceSelections((previous) => {
+      const valid = previous.filter((voice) => availableVoices.includes(voice));
+      return Array.from({ length: speakers.length }, (_, index) => {
+        const kept = valid[index];
+        if (kept && !valid.slice(0, index).includes(kept)) return kept;
+        const used = new Set(valid.slice(0, index));
+        const next = availableVoices.find((voice) => !used.has(voice));
+        return next ?? availableVoices[index % availableVoices.length];
+      });
+    });
+  }, [format, language, duration, speakers.length, availableVoices]);
+
+  async function fetchVoices() {
+    try {
+      const res = await fetch("/api/voices");
+      if (!res.ok) return;
+      const data = await res.json();
+      setVoices({
+        longform: data.longform ?? [],
+        streaming: data.streaming ?? [],
+        styles: data.styles ?? [],
+      });
+    } catch {
+      // The hardcoded lists stay as the fallback when the backend is unreachable.
+    }
+  }
 
   async function fetchConfig() {
     try {
@@ -309,13 +391,17 @@ export default function Home() {
       setRenamingFile(null);
       setRenameValue("");
       loadHistory();
-    } catch (e: any) {
-      alert("Rename failed: " + (e?.message || "Unknown error"));
+    } catch (e: unknown) {
+      setHistoryError(`Rename failed: ${errorMessage(e)}`);
     }
   }
 
   async function deleteFile(filename: string) {
-    if (!confirm(`Delete "${filename}" permanently?`)) return;
+    if (pendingDelete !== filename) {
+      setPendingDelete(filename);
+      return;
+    }
+    setPendingDelete(null);
     try {
       const res = await fetch(`/api/podcast/delete?filename=${encodeURIComponent(filename)}`, {
         method: "DELETE",
@@ -335,8 +421,8 @@ export default function Home() {
         setAudioFilename("");
       }
       loadHistory();
-    } catch (e: any) {
-      alert("Delete failed: " + (e?.message || "Unknown error"));
+    } catch (e: unknown) {
+      setHistoryError(`Delete failed: ${errorMessage(e)}`);
     }
   }
 
@@ -349,9 +435,11 @@ export default function Home() {
   }
 
   async function generateScript() {
-    if (!topic.trim()) return;
+    if (!topic.trim() || isGeneratingScript) return;
+    const runId = ++scriptRunIdRef.current;
     setIsGeneratingScript(true);
     setScript(null);
+    setScriptError(null);
     if (audioUrl) URL.revokeObjectURL(audioUrl);
     setAudioUrl(null);
     setHasEdits(false);
@@ -368,6 +456,7 @@ export default function Home() {
           format,
           speakers,
           language,
+          style: deliveryStyle,
         }),
       });
       if (!res.ok) {
@@ -378,22 +467,26 @@ export default function Home() {
           errMsg = errJson.detail || errJson.message || text || `HTTP ${res.status}`;
         } catch {}
         if (errMsg.includes("rate") || errMsg.includes("429")) {
-          throw new Error("Rate limited. Add a Dialogram or GitHub Models key in Settings for unlimited free generation.");
+          throw new Error("Rate limited. Add another provider key in Settings for unlimited generation.");
         }
         throw new Error(errMsg);
       }
       const data = await res.json();
+      if (runId !== scriptRunIdRef.current) return;
       setScript(data.script);
       setScriptStats(`${data.word_count} words · ${data.generation_time_seconds}s`);
-    } catch (e: any) {
-      if (e.name === "AbortError") {
+    } catch (e: unknown) {
+      if (runId !== scriptRunIdRef.current) return;
+      if (isAbortError(e)) {
         setScriptStats("Generation cancelled");
       } else {
-        alert("Script generation failed: " + (e?.message || "Unknown error"));
+        setScriptError(errorMessage(e));
       }
     } finally {
-      setIsGeneratingScript(false);
-      scriptAbortRef.current = null;
+      if (runId === scriptRunIdRef.current) {
+        setIsGeneratingScript(false);
+        scriptAbortRef.current = null;
+      }
     }
   }
 
@@ -415,11 +508,12 @@ export default function Home() {
     if (audioUrl) URL.revokeObjectURL(audioUrl);
     setIsGeneratingAudio(true);
     setAudioUrl(null);
+    setAudioError(null);
     setAudioProgress(2);
     setAudioStatusText("Initializing TTS...");
 
     // Progress timer
-    const wordCount = script.reduce((sum, line) => sum + line.content.split(/\s+/).length, 0);
+    const wordCount = script.reduce((sum, line) => sum + line.content.split(/\s+/).filter(Boolean).length, 0);
     const audioMinutes = wordCount / 150;
     // Sarvam cloud is fast (~30-90s), longform local is slow (~5-15min), realtime is fast (~30-90s)
     const isSarvam = isIndic;
@@ -428,8 +522,8 @@ export default function Home() {
     const totalSec = modelLoad + audioMinutes * 60 * rtf;
     let elapsed = 0;
 
-    if (audioTimerRef.current) clearInterval(audioTimerRef.current);
-    audioTimerRef.current = setInterval(() => {
+    window.clearInterval(audioTimerRef.current);
+    audioTimerRef.current = window.setInterval(() => {
       elapsed += 1;
       if (elapsed <= totalSec) {
         const pct = Math.min(95, (elapsed / totalSec) * 100);
@@ -444,21 +538,25 @@ export default function Home() {
       }
     }, 1000);
 
+    // AbortController for fetch, kept in a ref so the Cancel button can stop the job
+    const abortCtrl = new AbortController();
+    audioAbortRef.current = abortCtrl;
+
     // Safety timeout: abort and force-clear state if something hangs beyond 35 min
     const SAFETY_TIMEOUT_MS = 35 * 60 * 1000;
     const safetyTimer = setTimeout(() => {
       abortCtrl.abort();
-      if (audioTimerRef.current) clearInterval(audioTimerRef.current);
+      window.clearInterval(audioTimerRef.current);
       setIsGeneratingAudio(false);
       setAudioStatusText("Timed out — generation took too long. Check logs or try a shorter script.");
-      alert("Audio generation timed out after 35 minutes. The backend may still be processing — check the outputs folder or logs/audio_generation.log");
+      setAudioError(
+        "Audio generation timed out after 35 minutes. The backend may still be processing — check the outputs folder or logs/audio_generation.log"
+      );
     }, SAFETY_TIMEOUT_MS);
-
-    // AbortController for fetch (allows canceling hung requests)
-    const abortCtrl = new AbortController();
 
     try {
       let blob: Blob;
+      let savedFilename = "";
       if (isIndic) {
         const fullText = script.map((l) => l.content).join("\n\n");
         const res = await fetch("/api/tts/sarvam", {
@@ -489,19 +587,27 @@ export default function Home() {
         }
         blob = await res.blob();
       } else if (usesLongform) {
-        const voiceMap: Record<string, string> = {};
-        speakers.forEach((s, i) => (voiceMap[s] = voiceSelections[i] || s));
+        // Send the real speaker names and let the backend map them to voices, so the
+        // transcript keeps the host names and the cast order cannot swap the voices.
         const scriptPayload = script.map((line) => ({
-          role: voiceMap[line.speaker] || line.speaker,
+          speaker: line.speaker,
           content: line.content,
         }));
+        const castOrder: string[] = [];
+        for (const line of script) {
+          if (!castOrder.includes(line.speaker)) castOrder.push(line.speaker);
+        }
+        const voiceNames = castOrder.map(
+          (speaker) => voiceSelections[Math.max(0, speakers.indexOf(speaker))] ?? speaker
+        );
         const res = await fetch("/api/tts/longform", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           signal: abortCtrl.signal,
           body: JSON.stringify({
             script: scriptPayload,
-            voice_names: voiceSelections.slice(0, speakers.length),
+            voice_names: voiceNames,
+            style: deliveryStyle,
             save_to_disk: true,
             topic: topic.trim() || undefined,
             format,
@@ -517,6 +623,7 @@ export default function Home() {
           } catch {}
           throw new Error(errMsg);
         }
+        savedFilename = res.headers.get("X-Saved-Filename") ?? "";
         blob = await res.blob();
       } else {
         const fullText = script.map((l) => l.content).join("\n\n");
@@ -527,6 +634,7 @@ export default function Home() {
           body: JSON.stringify({
             text: fullText,
             speaker_name: voiceSelections[0] || "Carter",
+            style: deliveryStyle,
             save_to_disk: true,
             topic: topic.trim() || undefined,
             format,
@@ -542,28 +650,59 @@ export default function Home() {
           } catch {}
           throw new Error(errMsg);
         }
+        savedFilename = res.headers.get("X-Saved-Filename") ?? "";
         blob = await res.blob();
       }
 
       if (audioUrl) URL.revokeObjectURL(audioUrl);
       const url = URL.createObjectURL(blob);
       setAudioUrl(url);
-      setAudioFilename(`podcast_${topic.replace(/[^a-z0-9]/gi, "_").toLowerCase()}_${Date.now()}.wav`);
+      setAudioFilename(
+        savedFilename || `podcast_${topic.replace(/[^a-z0-9]/gi, "_").toLowerCase()}_${Date.now()}.wav`
+      );
       setAudioProgress(100);
       setAudioStatusText("Audio generation complete!");
       loadHistory();
-    } catch (e: any) {
-      if (e.name === "AbortError") {
+    } catch (e: unknown) {
+      if (isAbortError(e)) {
         setAudioStatusText("Cancelled");
       } else {
-        alert("Audio generation failed: " + (e?.message || "Unknown error"));
+        setAudioError(errorMessage(e));
         setAudioStatusText("Error");
       }
     } finally {
       clearTimeout(safetyTimer);
-      if (audioTimerRef.current) clearInterval(audioTimerRef.current);
+      window.clearInterval(audioTimerRef.current);
+      audioAbortRef.current = null;
       setIsGeneratingAudio(false);
     }
+  }
+
+  function cancelAudio() {
+    audioAbortRef.current?.abort();
+    window.clearInterval(audioTimerRef.current);
+    setIsGeneratingAudio(false);
+    setAudioStatusText("Cancelled");
+  }
+
+  function downloadTranscript() {
+    if (!script) return;
+    const payload = {
+      topic: topic.trim(),
+      format,
+      language,
+      duration_minutes: duration,
+      delivery: deliveryStyle,
+      script: script.map((line) => ({ speaker: line.speaker, content: line.content })),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const safeTopic = topic.replace(/[^a-z0-9]/gi, "_").toLowerCase() || "episode";
+    link.href = url;
+    link.download = `podcast_${safeTopic}_script.json`;
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   // GSAP Animations
@@ -972,7 +1111,7 @@ export default function Home() {
                     >
                       {availableVoices.map((v) => (
                         <option key={v} value={v}>
-                          {v}
+                          {voiceLabels[v] ?? v}
                         </option>
                       ))}
                     </select>
@@ -985,6 +1124,31 @@ export default function Home() {
                   : usesLongform
                   ? "Select a longform voice for each speaker. Longform audio on Apple Silicon can take 5–15 min."
                   : "Select a realtime voice for the monologue."}
+              </p>
+            </div>
+
+            {/* Delivery style */}
+            <div>
+              <label htmlFor="delivery-style" className="block text-sm font-medium text-muted mb-2">
+                Delivery
+              </label>
+              <select
+                id="delivery-style"
+                value={deliveryStyle}
+                onChange={(e) => setDeliveryStyle(e.target.value as DeliveryStyle)}
+                className="w-full rounded-xl bg-surface-2 border border-border px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30"
+              >
+                {DELIVERY_STYLES.map((style) => (
+                  <option key={style} value={style}>
+                    {style[0].toUpperCase() + style.slice(1)}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted mt-2">
+                Sets the tone of the whole episode. The scriptwriter can still mark a pause
+                (<code className="bg-surface-2 px-1 rounded">[[pause:0.8]]</code>) or a tonal
+                shift (<code className="bg-surface-2 px-1 rounded">[[style:calm]]</code>) inside a
+                line, and the audio engine renders both.
               </p>
             </div>
 
@@ -1153,6 +1317,28 @@ export default function Home() {
             </motion.div>
           </div>
 
+          {scriptError && (
+            <div className="flex items-start gap-2 rounded-xl border border-error/40 bg-error/10 px-3 py-2.5 mb-4">
+              <AlertTriangle className="w-4 h-4 text-error mt-0.5 shrink-0" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-error">Script generation failed</p>
+                <p className="text-xs text-muted mt-0.5 break-words">{scriptError}</p>
+              </div>
+              <Button variant="ghost" size="sm" onClick={() => setScriptError(null)}>
+                Dismiss
+              </Button>
+            </div>
+          )}
+
+          {!script && !isGeneratingScript && !scriptError && (
+            <div className="rounded-xl border border-dashed border-border bg-surface-2 px-4 py-8 text-center">
+              <Wand2 className="w-6 h-6 text-muted mx-auto mb-2" />
+              <p className="text-sm text-muted">
+                No script yet. Enter a topic above and press <span className="text-foreground">Generate Script</span>.
+              </p>
+            </div>
+          )}
+
           {isGeneratingScript && (
             <div ref={scriptLoadingRef} className="space-y-3 py-4">
               <div className="flex items-center gap-3">
@@ -1189,11 +1375,27 @@ export default function Home() {
                 <div className="space-y-4">
                   {script.map((line, idx) => (
                     <div key={idx} className="script-line border-b border-border last:border-0 pb-4 last:pb-0">
-                      <div className="text-xs font-bold uppercase tracking-wider text-accent mb-1">
-                        {line.speaker}
-                        {editedLines[idx] !== undefined && editedLines[idx] !== line.content && (
-                          <span className="ml-2 text-[10px] text-muted font-normal">edited</span>
-                        )}
+                      <div className="flex items-center gap-2 mb-1">
+                        <div className="text-xs font-bold uppercase tracking-wider text-accent">
+                          {line.speaker}
+                          {editedLines[idx] !== undefined && editedLines[idx] !== line.content && (
+                            <span className="ml-2 text-[10px] text-muted font-normal">edited</span>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          title="Add a 0.6 second pause at the end of this line"
+                          onClick={() => {
+                            const current = editedLines[idx] ?? line.content;
+                            const next = `${current.replace(/\s+$/, "")} [[pause:0.6]]`;
+                            setEditedLines((prev) => ({ ...prev, [idx]: next }));
+                            setHasEdits(true);
+                          }}
+                          className="inline-flex items-center gap-1 rounded-md border border-border bg-surface px-1.5 py-0.5 text-[10px] text-muted hover:text-foreground hover:border-accent/50 transition-colors"
+                        >
+                          <PauseCircle className="w-3 h-3" />
+                          pause
+                        </button>
                       </div>
                       <textarea
                         value={editedLines[idx] ?? line.content}
@@ -1224,12 +1426,25 @@ export default function Home() {
             <Badge variant={engineInfo.variant}>{engineInfo.label}</Badge>
           </CardHeader>
 
+          {audioError && (
+            <div className="flex items-start gap-2 rounded-xl border border-error/40 bg-error/10 px-3 py-2.5 mb-4">
+              <AlertTriangle className="w-4 h-4 text-error mt-0.5 shrink-0" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-error">Audio generation failed</p>
+                <p className="text-xs text-muted mt-0.5 break-words">{audioError}</p>
+              </div>
+              <Button variant="ghost" size="sm" onClick={() => setAudioError(null)}>
+                Dismiss
+              </Button>
+            </div>
+          )}
+
           {isGeneratingAudio && (
             <div ref={audioProgressRef} className="space-y-3 mb-4">
               <div className="h-2 w-full rounded-full bg-surface-2 overflow-hidden">
                 <div
                   className="audio-progress-bar h-full bg-gradient-to-r from-accent to-indigo-500 rounded-full"
-                  style={{ width: "0%" }}
+                  style={{ width: `${audioProgress}%` }}
                   role="progressbar"
                   aria-valuenow={audioProgress}
                   aria-valuemin={0}
@@ -1237,7 +1452,12 @@ export default function Home() {
                   aria-label={audioStatusText || "Generating audio"}
                 />
               </div>
-              <p className="text-sm text-muted">{audioStatusText}</p>
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm text-muted">{audioStatusText}</p>
+                <Button variant="ghost" size="sm" onClick={cancelAudio}>
+                  <span className="text-error">Cancel</span>
+                </Button>
+              </div>
             </div>
           )}
 
@@ -1259,11 +1479,21 @@ export default function Home() {
               <audio key={audioUrl} controls className="w-full rounded-lg">
                 <source src={audioUrl} type="audio/wav" />
               </audio>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <Button variant="secondary" asChild>
                   <a href={audioUrl} download={audioFilename}>
                     <Download className="w-4 h-4" />
                     Download WAV
+                  </a>
+                </Button>
+                <Button variant="secondary" onClick={downloadTranscript}>
+                  <FileJson className="w-4 h-4" />
+                  Download Script
+                </Button>
+                <Button variant="secondary" asChild>
+                  <a href="/feed/podcast.rss" target="_blank" rel="noreferrer">
+                    <Rss className="w-4 h-4" />
+                    RSS Feed
                   </a>
                 </Button>
               </div>
@@ -1511,10 +1741,17 @@ export default function Home() {
                                 </a>
                                 <button
                                   onClick={() => deleteFile(item.filename)}
-                                  className="text-sm text-muted hover:text-error transition-colors"
-                                  title="Delete"
+                                  onBlur={() => setPendingDelete(null)}
+                                  className={cn(
+                                    "text-sm transition-colors",
+                                    pendingDelete === item.filename
+                                      ? "text-error font-medium"
+                                      : "text-muted hover:text-error"
+                                  )}
+                                  title={pendingDelete === item.filename ? "Click again to confirm" : "Delete"}
+                                  aria-label={`Delete ${item.filename}`}
                                 >
-                                  <Trash2 className="w-4 h-4" />
+                                  {pendingDelete === item.filename ? "Confirm?" : <Trash2 className="w-4 h-4" />}
                                 </button>
                               </>
                             )}
@@ -1585,8 +1822,7 @@ function SettingsModal({
 }) {
   const keys = [
     { id: "DIALOGRAM_API_KEY", label: "Dialogram API Key", desc: "Primary script provider (Qwen 3.6 Plus)", link: "https://dialogram.me/" },
-    { id: "GITHUB_PERSONAL_ACCESS_TOKEN", label: "GitHub Models Token", desc: "Free GPT-4o fallback", link: "https://github.com/settings/tokens" },
-    { id: "GROQ_API_KEY", label: "Groq API Key", desc: "Fast Llama-3.3-70B fallback", link: "https://console.groq.com/keys" },
+    { id: "GROQ_API_KEY", label: "Groq API Key", desc: "Fast fallback (openai/gpt-oss-120b)", link: "https://console.groq.com/keys" },
     { id: "SARVAM_API_KEY", label: "Sarvam API Key", desc: "Indian-language TTS", link: "https://dashboard.sarvam.ai/" },
     { id: "TAVILY_API_KEY", label: "Tavily API Key", desc: "Live web research", link: "https://app.tavily.com/home" },
     { id: "GEMINI_API_KEY", label: "Gemini API Key", desc: "Google Gemini fallback", link: "https://aistudio.google.com/api-keys" },
@@ -1597,27 +1833,32 @@ function SettingsModal({
   ];
 
   const [values, setValues] = useState<Record<string, string>>({});
+  const [cleared, setCleared] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Seed form values from config when modal opens
+  // Start from an empty form: the masked value is shown as a hint only, so saving
+  // without typing can never overwrite a working key with its own mask.
   useEffect(() => {
     if (isOpen) {
-      const seeded: Record<string, string> = {};
-      keys.forEach((k) => {
-        seeded[k.id] = config[k.id]?.masked || "";
-      });
-      setValues(seeded);
+      setValues({});
+      setCleared([]);
+      setSaveError(null);
     }
-  }, [isOpen, config]);
+  }, [isOpen]);
 
   async function save() {
-    const payload: Record<string, string> = {};
+    const payload: Record<string, string | null> = {};
     keys.forEach((k) => {
-      const v = values[k.id] ?? "";
-      // Send empty string to delete, otherwise send trimmed value
-      payload[k.id] = v.trim();
+      const value = (values[k.id] ?? "").trim();
+      if (value) {
+        payload[k.id] = value;
+      } else if (cleared.includes(k.id)) {
+        payload[k.id] = null;
+      }
     });
     setSaving(true);
+    setSaveError(null);
     try {
       const res = await fetch("/api/config", {
         method: "POST",
@@ -1635,8 +1876,8 @@ function SettingsModal({
       }
       onSaved();
       onClose();
-    } catch (e: any) {
-      alert("Failed to save: " + e.message);
+    } catch (e: unknown) {
+      setSaveError(errorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -1672,15 +1913,37 @@ function SettingsModal({
                 <input
                   type="password"
                   value={values[k.id] || ""}
-                  onChange={(e) => setValues((prev) => ({ ...prev, [k.id]: e.target.value }))}
+                  onChange={(e) => {
+                    setValues((prev) => ({ ...prev, [k.id]: e.target.value }));
+                    setCleared((prev) => prev.filter((id) => id !== k.id));
+                  }}
                   placeholder={status?.masked ? `Currently: ${status.masked}` : "Paste key here"}
+                  aria-label={`${k.label} value`}
                   className="w-full rounded-lg bg-surface-2 border border-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30"
                 />
+                {status?.configured && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setValues((prev) => ({ ...prev, [k.id]: "" }));
+                      setCleared((prev) => (prev.includes(k.id) ? prev : [...prev, k.id]));
+                    }}
+                    className="mt-1.5 text-[11px] text-muted hover:text-error transition-colors"
+                  >
+                    {cleared.includes(k.id) ? "Will be removed on save" : "Remove this key"}
+                  </button>
+                )}
               </div>
             </div>
           );
         })}
       </div>
+      {saveError && (
+        <div className="mt-4 flex items-start gap-2 rounded-xl border border-error/40 bg-error/10 px-3 py-2.5">
+          <AlertTriangle className="w-4 h-4 text-error mt-0.5 shrink-0" />
+          <p className="text-xs text-muted break-words">{saveError}</p>
+        </div>
+      )}
       <div className="mt-6 flex gap-3">
         <Button variant="primary" onClick={save} disabled={saving}>
           {saving ? "Saving..." : "Save Changes"}
@@ -1750,7 +2013,7 @@ function HelpModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }
         <section>
           <h4 className="text-accent font-semibold mb-2 text-base">Which Model Will Be Used?</h4>
           <p className="text-sm text-muted mb-2">
-            The app <strong>automatically picks</strong> the right engine based on your settings. The badge next to "Audio" shows you which one:
+            The app <strong>automatically picks</strong> the right engine based on your settings. The badge next to &quot;Audio&quot; shows you which one:
           </p>
           <div className="rounded-lg bg-surface-2 border border-border p-3 space-y-2 text-sm">
             <div className="flex items-center justify-between">

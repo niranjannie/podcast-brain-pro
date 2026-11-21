@@ -563,7 +563,11 @@ export default function LandingPage() {
 
             {/* CTAs */}
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
-              <a href="https://github.com/niranjannie/podcast-brain-pro" target="_blank" className="flex items-center gap-2 px-8 py-4 rounded-xl bg-accent text-slate-900 font-bold hover:brightness-110 transition-all shadow-xl shadow-accent/20 text-lg">
+              <a href="/" className="flex items-center gap-2 px-8 py-4 rounded-xl bg-accent text-slate-900 font-bold hover:brightness-110 transition-all shadow-xl shadow-accent/20 text-lg">
+                <Play className="w-5 h-5" />
+                Open the Studio
+              </a>
+              <a href="https://github.com/niranjannie/podcast-brain-pro" target="_blank" className="flex items-center gap-2 px-6 py-4 rounded-xl bg-white/[0.05] border border-white/10 text-foreground font-semibold hover:bg-white/[0.08] transition-all">
                 <Star className="w-5 h-5" />
                 Star on GitHub
               </a>
@@ -783,7 +787,7 @@ export default function LandingPage() {
       <section className="py-16 sm:py-20">
         <div className="max-w-6xl mx-auto px-4 sm:px-6">
           <div className="text-center mb-12">
-            <div className="text-xs font-semibold text-accent uppercase tracking-wider mb-2">Who It's For</div>
+            <div className="text-xs font-semibold text-accent uppercase tracking-wider mb-2">Who It&apos;s For</div>
             <h2 className="text-2xl sm:text-3xl font-bold mb-3">Built For Everyone</h2>
             <p className="text-muted max-w-xl mx-auto">From classrooms to newsrooms — if you have something to say, this helps you say it.</p>
           </div>
@@ -900,7 +904,7 @@ export default function LandingPage() {
       <section className="py-16 sm:py-24">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 text-center space-y-8">
           <h2 className="text-3xl sm:text-5xl font-black tracking-tight">
-            Your voice doesn't need a studio.
+            Your voice doesn&apos;t need a studio.
             <br />
             <span className="bg-gradient-to-r from-accent via-indigo-400 to-purple-400 bg-clip-text text-transparent">
               It just needs an idea.
