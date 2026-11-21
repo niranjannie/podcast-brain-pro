@@ -4,20 +4,23 @@ import { cn } from "@/lib/utils";
 import React, { ReactNode, forwardRef } from "react";
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: "primary" | "secondary" | "ghost";
+  variant?: "primary" | "secondary" | "ghost" | "danger";
   size?: "sm" | "md" | "lg";
   children: ReactNode;
   asChild?: boolean;
 }
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant = "secondary", size = "md", children, asChild, type = "button", ...props }, ref) => {
+  (
+    { className, variant = "secondary", size = "md", children, asChild, type = "button", ...props },
+    ref
+  ) => {
     const variants = {
       primary:
-        "bg-gradient-to-r from-accent to-accent-dim text-slate-900 font-semibold shadow-lg shadow-accent/20 hover:shadow-accent/30 hover:brightness-110",
-      secondary:
-        "bg-surface-2 text-foreground border border-border hover:bg-surface-3",
+        "bg-gradient-to-r from-accent to-accent-dim text-white font-semibold shadow-lg shadow-accent/20 hover:brightness-110",
+      secondary: "bg-surface-2 text-foreground border border-border hover:bg-surface-3",
       ghost: "text-muted hover:text-foreground hover:bg-white/5",
+      danger: "bg-error/10 text-error border border-error/40 hover:bg-error/20",
     };
 
     const sizes = {
@@ -34,9 +37,12 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     );
 
     if (asChild && React.isValidElement(children)) {
-      return React.cloneElement(children as React.ReactElement, {
-        className: cn(classes, (children as React.ReactElement).props.className),
-        ...props,
+      // Anchors cannot take a button type or a disabled attribute.
+      const child = children as React.ReactElement<{ className?: string }>;
+      const { disabled: _disabled, ...anchorProps } = props;
+      return React.cloneElement(child, {
+        className: cn(classes, child.props.className),
+        ...anchorProps,
       });
     }
 

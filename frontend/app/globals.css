@@ -3,18 +3,19 @@
 @tailwind utilities;
 
 :root {
-  --background: #0a0a0a;
-  --foreground: #f8fafc;
-  --surface: #111827;
-  --surface-2: #1f2937;
-  --surface-3: #27354f;
-  --border: #334155;
-  --muted: #94a3b8;
-  --accent: #38bdf8;
-  --accent-dim: #0ea5e9;
-  --success: #22c55e;
-  --warning: #f59e0b;
-  --error: #ef4444;
+  --background: #08090c;
+  --foreground: #f2f5fa;
+  --surface: #10131a;
+  --surface-2: #171b26;
+  --surface-3: #1f2534;
+  --border: #262d3d;
+  --muted: #8b96ab;
+  --accent: #7c8cf8;
+  --accent-dim: #5b6ef0;
+  --accent-2: #22d3ee;
+  --success: #34d399;
+  --warning: #fbbf24;
+  --error: #f87171;
   --glass-bg: rgba(255, 255, 255, 0.03);
   --glass-border: rgba(255, 255, 255, 0.08);
 }
@@ -26,7 +27,8 @@ html {
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: "Inter", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* Custom scrollbar */
@@ -40,15 +42,34 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: #262d3d;
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: #3a4459;
 }
 
-/* Glass card utility */
+/* One focus treatment for the whole app */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Surfaces */
+.panel {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0)) ,
+    var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+}
+
+.panel-inset {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
 .glass {
   background: var(--glass-bg);
   backdrop-filter: blur(12px);
@@ -56,41 +77,52 @@ body {
   border: 1px solid var(--glass-border);
 }
 
-/* Gradient text */
+/* Brand gradient */
 .gradient-text {
-  background: linear-gradient(135deg, #38bdf8 0%, #818cf8 50%, #c084fc 100%);
+  background: linear-gradient(120deg, var(--accent) 0%, var(--accent-2) 100%);
   -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
   background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
-/* Animated gradient background */
-.animated-gradient {
-  background: linear-gradient(
-    -45deg,
-    #0a0a0a,
-    #0f172a,
-    #1e1b4b,
-    #0a0a0a
-  );
-  background-size: 400% 400%;
-  animation: gradient-shift 20s ease infinite;
+.brand-glow {
+  background: radial-gradient(closest-side, rgba(124, 140, 248, 0.22), transparent);
 }
 
-@keyframes gradient-shift {
+/* A quiet dot texture behind the workspace */
+.dot-grid {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: 26px 26px;
+}
+
+/* Indeterminate activity bar, used while a job runs without real progress */
+.activity-bar {
+  position: relative;
+  overflow: hidden;
+}
+
+.activity-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  animation: activity-slide 1.6s ease-in-out infinite;
+}
+
+@keyframes activity-slide {
   0% {
-    background-position: 0% 50%;
-  }
-  50% {
-    background-position: 100% 50%;
+    transform: translateX(-100%);
   }
   100% {
-    background-position: 0% 50%;
+    transform: translateX(350%);
   }
 }
 
-/* Focus ring */
-.focus-ring:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.3);
+/* Delivery markers inside the script editor */
+.directive {
+  color: var(--accent-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
 }

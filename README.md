@@ -85,6 +85,7 @@ Full setup guide: [`docs/SETUP.md`](./docs/SETUP.md)
 - **Natural dialogue formats** — Not just reading text aloud. Interview and panel modes generate interruptions, disagreements, and follow-ups.
 - **Directed delivery** — The scriptwriter marks pauses (`[[pause:0.8]]`) and tonal shifts (`[[style:calm]]`), and the audio engine renders them as real silence and a different voice setting.
 - **A distinct voice per host** — Each speaker is mapped to a voice file, so two hosts never end up sharing one voice.
+- **Voice Lab** — Add small local engines next to VibeVoice: Kokoro 82M (~300 MB, Apache-2.0, runs on CPU) for fast drafts, and consent-gated voice cloning with Chatterbox (MIT) or Qwen3-TTS (Apache-2.0). The catalogue tells you what is installed and whether it actually runs on your machine.
 - **Podcast ready output** — Every export is normalised to -16 LUFS, the RSS feed carries the transcript, and the episode metadata records the loudness measurement.
 - **RSS feed built-in** — Generate once, publish everywhere. No extra tools needed.
 - **Truly open source** — MIT licensed. Full code, full control, zero restrictions.
@@ -161,6 +162,7 @@ podcast-brain-pro/
 ├── voice-service/         # FastAPI backend
 │   ├── main.py            # API endpoints, TTS, LLM fallbacks
 │   ├── script_pipeline.py # Script contract, delivery directives, voice mapping
+│   ├── engines.py         # Optional local engines: Kokoro, Chatterbox, Qwen3-TTS
 │   ├── audio_pipeline.py  # Loudness normalisation and measurement
 │   ├── rss_generator.py   # RSS feed generator
 │   ├── test_script_pipeline.py

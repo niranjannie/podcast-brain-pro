@@ -100,6 +100,7 @@ from scipy.io import wavfile
 
 # Shared script contract: turn keys, delivery directives, chunking, voice resolution.
 from audio_pipeline import measure_loudness, normalize_loudness
+from engines import EngineUnavailable, list_engines, synthesize
 from script_pipeline import (
     DEFAULT_STYLE,
     build_units,
@@ -1445,6 +1446,186 @@ async def tts_realtime(req: TTSRealtimeRequest):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+# ============== Optional local engines (Kokoro, Chatterbox, ...) ==============
+
+REFERENCE_DIR = os.path.join(OUTPUT_DIR, "reference_voices")
+CONSENT_DIR = os.path.join(OUTPUT_DIR, "voice_consents")
+
+def _synthesize_engine_text(
+    engine_id: str,
+    text: str,
+    voice: Optional[str] = None,
+    reference_path: Optional[str] = None,
+    speed: float = 1.0,
+    exaggeration: float = 0.5,
+    cfg_weight: float = 0.5,
+) -> bytes:
+    """Render text with an optional engine, honouring the delivery directives.
+
+    Pauses become real silence between the rendered parts, exactly as they do on the
+    built-in VibeVoice paths.
+    """
+    units = split_units(text)
+    if not units:
+        raise HTTPException(status_code=400, detail="text is empty")
+
+    audios: List[bytes] = []
+    gaps_ms: List[int] = []
+    for unit in units:
+        audio = synthesize(
+            engine_id,
+            unit["text"],
+            voice=voice,
+            reference_path=reference_path,
+            speed=speed,
+            exaggeration=exaggeration,
+            cfg_weight=cfg_weight,
+        )
+        audios.append(audio)
+        gaps_ms.append(int(round((unit.get("pause_after") or 0.0) * 1000)))
+
+    if len(audios) == 1:
+        return audios[0]
+    return _stitch_wav_bytes(audios, silence_ms=0, gaps_ms=gaps_ms)
+
+class EngineTTSRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+    engine: str = "kokoro"
+    voice: Optional[str] = None
+    speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    save_to_disk: Optional[bool] = False
+    topic: Optional[str] = None
+
+@app.get("/engines")
+async def engines_catalog():
+    """List the optional local engines, what they cost and whether they are installed."""
+    return {"engines": list_engines()}
+
+@app.post("/tts/engine")
+async def tts_with_engine(req: EngineTTSRequest):
+    """Synthesise with a small optional engine such as Kokoro or Chatterbox."""
+    loop = asyncio.get_event_loop()
+    try:
+        audio_bytes = await loop.run_in_executor(
+            _tts_executor,
+            _synthesize_engine_text,
+            req.engine,
+            req.text,
+            req.voice,
+            None,
+            req.speed,
+        )
+    except EngineUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except KeyError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+    meta = {"engine": req.engine, "voice": req.voice, "word_count": len(req.text.split())}
+    if req.topic:
+        meta["topic"] = req.topic
+    audio_bytes = _finalize_audio(audio_bytes, meta)
+
+    saved_filename = None
+    if req.save_to_disk:
+        saved_filename = save_to_outputs(audio_bytes, prefix=f"podcast_{req.engine}", metadata=meta)
+
+    headers = {"X-Saved-Filename": saved_filename} if saved_filename else {}
+    return StreamingResponse(io.BytesIO(audio_bytes), media_type="audio/wav", headers=headers)
+
+@app.post("/tts/clone")
+async def tts_clone(
+    text: str = Form(...),
+    engine: str = Form("chatterbox"),
+    consent: bool = Form(False),
+    reference: UploadFile = File(...),
+    exaggeration: float = Form(0.5),
+    cfg_weight: float = Form(0.5),
+    save_to_disk: bool = Form(True),
+):
+    """Clone a voice from a short reference clip and speak new text with it.
+
+    Cloning is consent gated: the caller must confirm they own the voice or have
+    permission to clone it, and the confirmation is stored with the reference file.
+    """
+    if not consent:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Voice cloning needs consent. Confirm that this is your own voice or "
+                "that you have written permission from the speaker, then try again."
+            ),
+        )
+
+    data = await reference.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="reference audio is empty")
+    if len(data) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="reference audio must be under 25 MB")
+
+    os.makedirs(REFERENCE_DIR, exist_ok=True)
+    os.makedirs(CONSENT_DIR, exist_ok=True)
+    safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", os.path.basename(reference.filename or "reference.wav"))
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    reference_path = os.path.join(REFERENCE_DIR, f"{stamp}_{safe_name}")
+    with open(reference_path, "wb") as handle:
+        handle.write(data)
+
+    consent_record = {
+        "created_at": datetime.now().isoformat(),
+        "engine": engine,
+        "reference_audio": os.path.basename(reference_path),
+        "text_characters": len(text),
+        "statement": (
+            "The caller confirmed that the reference voice is their own voice or that "
+            "they have written permission from the speaker to clone it."
+        ),
+    }
+    with open(os.path.join(CONSENT_DIR, f"{stamp}.json"), "w", encoding="utf-8") as handle:
+        json.dump(consent_record, handle, indent=2)
+
+    loop = asyncio.get_event_loop()
+    try:
+        audio_bytes = await loop.run_in_executor(
+            _tts_executor,
+            _synthesize_engine_text,
+            engine,
+            text,
+            None,
+            reference_path,
+            1.0,
+            exaggeration,
+            cfg_weight,
+        )
+    except EngineUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except KeyError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+    meta = {
+        "engine": engine,
+        "cloned_from": os.path.basename(reference_path),
+        "word_count": len(text.split()),
+        "consent_record": f"{stamp}.json",
+    }
+    audio_bytes = _finalize_audio(audio_bytes, meta)
+
+    saved_filename = None
+    if save_to_disk:
+        saved_filename = save_to_outputs(audio_bytes, prefix="podcast_clone", metadata=meta)
+
+    headers = {"X-Saved-Filename": saved_filename} if saved_filename else {}
+    return StreamingResponse(io.BytesIO(audio_bytes), media_type="audio/wav", headers=headers)
 
 def _do_tts_longform_sync(
     req: TTSLongformRequest,
