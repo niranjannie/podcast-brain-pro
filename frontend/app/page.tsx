@@ -2070,8 +2070,8 @@ function HelpModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }
           <h4 className="text-accent font-semibold mb-2 text-base">API Keys</h4>
           <ul className="list-disc pl-5 space-y-1">
             <li><strong>Dialogram</strong> — Primary script provider (free tier).</li>
-            <li><strong>GitHub Models</strong> — Free GPT-4o fallback (GitHub PAT).</li>
-            <li><strong>Groq / DeepSeek / Gemini / Mistral / Together / OpenRouter</strong> — Optional fallbacks.</li>
+            <li><strong>Groq</strong> — Fast fallback (<code>openai/gpt-oss-120b</code>).</li>
+            <li><strong>DeepSeek / Gemini / Mistral / Together / OpenRouter / Ollama</strong> — Optional fallbacks.</li>
             <li><strong>Sarvam</strong> — Required only for Indian-language audio.</li>
           </ul>
           <p className="mt-2 text-xs">

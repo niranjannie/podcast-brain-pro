@@ -110,6 +110,7 @@ from script_pipeline import (
     resolve_voices,
     segment_gap_seconds,
     speaker_order,
+    split_sentences,
     split_units,
     style_names,
     style_params,
@@ -1589,21 +1590,20 @@ async def tts_longform(req: TTSLongformRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 def chunk_text_by_sentences(text: str, max_chars: int = 2400) -> List[str]:
-    """Split text into chunks at sentence boundaries, respecting max_chars."""
-    # Split on sentence terminators for multiple languages (., ।, ৷, etc.)
-    sentences = re.split(r'(?<=[.।।|!?।])\s+', text)
+    """Split text into chunks at sentence boundaries, respecting max_chars.
+
+    The sentence split itself lives in script_pipeline so the TTS paths and the
+    script contract cannot drift apart.
+    """
     chunks = []
     current = ""
-    for s in sentences:
-        s = s.strip()
-        if not s:
-            continue
-        if len(current) + len(s) + 1 <= max_chars:
-            current = current + " " + s if current else s
+    for sentence in split_sentences(text):
+        if len(current) + len(sentence) + 1 <= max_chars:
+            current = current + " " + sentence if current else sentence
         else:
             if current:
                 chunks.append(current)
-            current = s
+            current = sentence
     if current:
         chunks.append(current)
     return chunks

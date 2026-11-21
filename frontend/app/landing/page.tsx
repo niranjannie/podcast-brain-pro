@@ -536,7 +536,7 @@ export default function LandingPage() {
           <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.7 }} className="text-center space-y-6">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-accent/10 border border-accent/20 text-accent text-xs font-semibold">
               <Sparkles className="w-3.5 h-3.5" />
-              Open Source · MIT License · 100% Free
+              Open Source · MIT License · Free to run locally
             </div>
 
             <h1 className="text-4xl sm:text-6xl font-black tracking-tight leading-[1.1]">
@@ -556,7 +556,7 @@ export default function LandingPage() {
               <div className="flex items-center gap-2 mb-3 justify-center">
                 <Music className="w-4 h-4 text-accent" />
                 <span className="text-xs font-semibold text-accent uppercase tracking-wider">Hear It In Action</span>
-                <span className="text-xs text-muted">— AI voice clone narrating the story</span>
+                <span className="text-xs text-muted">— AI narration, rendered locally</span>
               </div>
               <AudioPlayer src={PROMO_AUDIO.file} title={PROMO_AUDIO.title} subtitle={PROMO_AUDIO.subtitle} showWave />
             </div>
@@ -827,7 +827,7 @@ export default function LandingPage() {
                 Your Keys, Your Control
               </div>
               <div className="space-y-2.5 text-sm">
-                {["Dialogram API","GitHub Models","Groq (optional)","Sarvam API","Tavily (optional)"].map((k) => (
+                {["Dialogram API","Groq (optional)","Sarvam API","Tavily (optional)","Ollama (local, optional)"].map((k) => (
                   <div key={k} className="flex items-center justify-between py-1.5 border-b border-white/5 last:border-0">
                     <span className="text-muted">{k}</span>
                     <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />

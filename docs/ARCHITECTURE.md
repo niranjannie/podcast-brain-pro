@@ -91,17 +91,35 @@ The frontend automatically picks the right TTS engine:
 
 ## LLM Fallback Chain
 
-`llm_chat()` in `main.py` tries providers in order until one succeeds:
+`llm_chat()` in `main.py` tries providers in order until one succeeds. Every model id can
+be overridden with an environment variable (`GROQ_MODEL`, `GEMINI_MODEL`, ...), so a
+retired id is a config change, not a code change:
 
 1. Dialogram (`qwen-3.6-plus`)
-2. GitHub Models (`gpt-4o`)
-3. Groq (`llama-3.3-70b`)
-4. DeepSeek
-5. Ollama (local)
-6. Gemini
-7. Mistral
-8. Together AI
-9. OpenRouter
+2. Groq (`openai/gpt-oss-120b`)
+3. DeepSeek (`deepseek-v4-flash`)
+4. Ollama (local, `qwen3:8b` by default)
+5. Gemini (`gemini-2.5-flash`)
+6. Mistral (`mistral-small-latest`)
+7. Together AI (`together_ai/deepseek-ai/DeepSeek-V4.1-Flash-1017`)
+8. OpenRouter (a free model picked from the live catalogue)
+
+GitHub Models was removed from the chain: its inference API was retired on 30 Jul 2026.
+
+## Script Contract
+
+`script_pipeline.py` owns everything that turns a script into something the TTS layer
+understands:
+
+- `normalize_turns()` accepts a turn keyed `speaker` or `role` and normalises it once.
+- `build_units()` assigns global speaker numbers that never change between chunks.
+- Delivery directives: `[[pause:0.8]]` (real silence) and `[[style:calm]]` (delivery
+  settings), applied on the local, realtime and Sarvam paths.
+- `resolve_voices()` maps every speaker to its own voice file: an explicit
+  `voice_names` entry first, then a name match, then a round robin over what is left.
+
+`audio_pipeline.py` normalises every export to -16 LUFS with a -1.5 dBTP ceiling and
+measures the result.
 
 ## Key Endpoints
 
@@ -109,6 +127,7 @@ The frontend automatically picks the right TTS engine:
 |----------|--------|-------------|
 | `/` | GET | Web UI (HTML fallback) |
 | `/health` | GET | Device status & loaded models |
+| `/voices` | GET | Voice presets on disk and the delivery styles |
 | `/config` | GET/POST | API key management |
 | `/podcast/generate` | POST | Research + script generation |
 | `/podcast/history` | GET | List generated episodes |

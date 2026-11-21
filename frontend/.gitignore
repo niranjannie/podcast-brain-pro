@@ -3,6 +3,12 @@
 out/
 *.tsbuildinfo
 
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+
 # Vercel
 .vercel
 
