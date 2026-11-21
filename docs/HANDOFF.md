@@ -1,5 +1,13 @@
 # Handoff — context for the next session
 
+> **Update, second pass (same day, different model).** A full studio redesign and a Voice
+> Lab with small local engines and consent-gated voice cloning landed after this file was
+> written. Read `docs/FRESH_ASSESSMENT_2026-11.md` first — it has the verdict on voice
+> cloning, what was actually verified (Kokoro produced real audio through the API and the
+> UI; Chatterbox is broken on Python 3.14), and what is still pending. Commits:
+> `17480eb` on top of `8749286`. The review brief for an outside model is
+> `docs/REVIEW_REQUEST.md`; its diff range predates the redesign.
+
 Last updated: 2026-11-21 by the agent that ran the November 2026 audit and modernisation
 pass. Read this first, then `docs/PRODUCT_AUDIT_2026-11.md` (what was broken and what
 was fixed) and `docs/ROADMAP_NEXT_LEVEL.md` (what to do next).
