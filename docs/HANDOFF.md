@@ -7,6 +7,14 @@
 > UI; Chatterbox is broken on Python 3.14), and what is still pending. Commits:
 > `17480eb` on top of `8749286`. The review brief for an outside model is
 > `docs/REVIEW_REQUEST.md`; its diff range predates the redesign.
+>
+> **Update, third pass (2026-11-22).** The read-only backend audit finally returned and
+> found two real defects from the earlier work: the RSS transcript sidecar was written to
+> the wrong directory (so the feature was dead), and `voice-service/.env` was never read
+> at all. Both are fixed in `e2fbd52`, along with ~25 other findings. Two of its
+> high-severity claims were false positives — the gap indexing is correct — and the
+> reasoning is recorded in `docs/BACKEND_AUDIT_2_FIXES.md` so the next reviewer does not
+> have to redo it. 41 unit tests and 14 API smoke checks pass.
 
 Last updated: 2026-11-21 by the agent that ran the November 2026 audit and modernisation
 pass. Read this first, then `docs/PRODUCT_AUDIT_2026-11.md` (what was broken and what
