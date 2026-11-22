@@ -67,7 +67,7 @@ def generate_podcast_rss(
             except Exception:
                 pass
 
-        title = metadata.get("topic") or metadata.get("title") or f["filename"].replace(".wav", "").replace("_", " ")
+        title = metadata.get("title") or metadata.get("topic") or f["filename"].replace(".wav", "").replace("_", " ")
         description = metadata.get("description") or f"Generated podcast episode: {title}"
         # UTC, and labelled as UTC. Local time with a +0000 suffix made episodes look
         # like they were published in the future.
@@ -91,6 +91,15 @@ def generate_podcast_rss(
                 f'type="application/json" rel="captions"/>'
             )
 
+        chapters_tag = ""
+        chapters_path = os.path.splitext(f["path"])[0] + ".chapters.json"
+        if os.path.exists(chapters_path):
+            chapters_url = f"{base_url}/outputs/{quote(os.path.basename(chapters_path))}"
+            chapters_tag = (
+                f'\n      <podcast:chapters url="{escape(chapters_url)}" '
+                f'type="application/json+chapters"/>'
+            )
+
         # A stable guid: the enclosure URL changes on a rename or a host move, and
         # podcast clients would re-download the whole back catalogue.
         episode_id = metadata.get("episode_id")
@@ -107,7 +116,7 @@ def generate_podcast_rss(
       <itunes:duration>{duration_hms}</itunes:duration>
       <itunes:episodeType>full</itunes:episodeType>
       <itunes:explicit>{'true' if explicit else 'false'}</itunes:explicit>
-      {guid}{transcript_tag}
+      {guid}{transcript_tag}{chapters_tag}
     </item>"""
         items.append(item)
 

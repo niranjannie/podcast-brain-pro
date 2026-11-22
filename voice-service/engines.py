@@ -11,14 +11,150 @@ Nothing in this module runs at import time.
 
 from __future__ import annotations
 
+import atexit
 import importlib.util
 import io
+import json
 import os
+import select
+import subprocess
+import sys
+import threading
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 from scipy.io import wavfile
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MLX_WORKER_PATH = os.path.join(BASE_DIR, "mlx_worker.py")
+MLX_ENGINES = {"qwen3-tts", "chatterbox"}
+MLX_INSTALL = (
+    "cd voice-service && python3.12 -m venv .venv-mlx && "
+    ".venv-mlx/bin/pip install -r requirements-mlx.txt"
+)
+
+
+def _mlx_python() -> str:
+    return os.environ.get(
+        "MLX_AUDIO_PYTHON", os.path.join(BASE_DIR, ".venv-mlx", "bin", "python")
+    )
+
+
+def _mlx_runtime_available() -> bool:
+    return os.path.isfile(_mlx_python()) and os.access(_mlx_python(), os.X_OK)
+
+
+def _mlx_runtime_health(_engine_id: str) -> Dict[str, Any]:
+    if not _mlx_runtime_available():
+        return {"ok": False, "detail": f"Not installed. {MLX_INSTALL}"}
+    try:
+        result = subprocess.run(
+            [_mlx_python(), MLX_WORKER_PATH, "--check"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return {"ok": False, "detail": f"MLX runtime check failed: {error}"}
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        return {"ok": False, "detail": f"MLX runtime is broken: {detail[-800:]}"}
+    return {"ok": True, "detail": "Ready in the isolated MLX runtime"}
+
+
+class MLXWorker:
+    """Serialize requests to one persistent worker; models stay loaded between calls."""
+
+    def __init__(self) -> None:
+        self._process: Optional[subprocess.Popen] = None
+        self._lock = threading.Lock()
+
+    def _response(self, timeout: int) -> Dict[str, Any]:
+        process = self._process
+        if process is None or process.stdout is None:
+            raise RuntimeError("MLX worker is not running")
+        readable, _, _ = select.select([process.stdout], [], [], timeout)
+        if not readable:
+            raise TimeoutError(f"MLX generation exceeded {timeout} seconds")
+        line = process.stdout.readline()
+        if not line:
+            raise RuntimeError(f"MLX worker exited with status {process.poll()}")
+        return json.loads(line)
+
+    def _start(self, engine_id: str) -> None:
+        if self._process is not None and self._process.poll() is None:
+            return
+        if not _mlx_runtime_available():
+            raise EngineUnavailable(engine_id, MLX_INSTALL)
+        self._process = subprocess.Popen(
+            [_mlx_python(), MLX_WORKER_PATH],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=None,
+            cwd=BASE_DIR,
+        )
+        ready = self._response(30)
+        if not ready.get("ok") or not ready.get("ready"):
+            raise RuntimeError(ready.get("detail") or "MLX worker failed to start")
+
+    def synthesize(self, request: Dict[str, Any]) -> bytes:
+        timeout = int(os.environ.get("MLX_GENERATION_TIMEOUT", "1800"))
+        with self._lock:
+            audio_path: Optional[str] = None
+            try:
+                self._start(str(request["engine"]))
+                process = self._process
+                if process is None or process.stdin is None:
+                    raise RuntimeError("MLX worker is not available")
+                process.stdin.write(json.dumps(request).encode("utf-8") + b"\n")
+                process.stdin.flush()
+                response = self._response(timeout)
+                if not response.get("ok"):
+                    if response.get("traceback"):
+                        print(response["traceback"], file=sys.stderr)
+                    raise RuntimeError(response.get("detail") or "MLX generation failed")
+                audio_path = response["audio_path"]
+                if not isinstance(audio_path, str):
+                    raise RuntimeError("MLX worker returned an invalid audio path")
+                with open(audio_path, "rb") as handle:
+                    return handle.read()
+            except Exception:
+                self.close()
+                raise
+            finally:
+                if audio_path:
+                    try:
+                        os.unlink(audio_path)
+                    except OSError:
+                        pass
+
+    def close(self) -> None:
+        process = self._process
+        self._process = None
+        if process is None:
+            return
+        if process.stdin:
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            try:
+                process.terminate()
+            except OSError:
+                pass
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
+_mlx_worker = MLXWorker()
+atexit.register(_mlx_worker.close)
 
 
 class EngineUnavailable(RuntimeError):
@@ -51,33 +187,19 @@ class EngineSpec:
     def installed(self) -> bool:
         if not self.wired:
             return False
+        if self.id in MLX_ENGINES:
+            return _mlx_runtime_available()
         try:
             return importlib.util.find_spec(self.module) is not None
         except (ImportError, ValueError):
             return False
 
     def health(self) -> Dict[str, Any]:
-        """Report whether the engine can actually run, not just whether it imports.
-
-        A package can be installed and still fail at runtime because one of its own
-        dependencies is broken. Chatterbox is the example that matters here: perth,
-        its watermarking dependency, needs librosa.resample, which is not importable
-        on every Python version.
-        """
+        """Report whether the engine can actually run, not just whether it imports."""
+        if self.id in MLX_ENGINES:
+            return _mlx_runtime_health(self.id)
         if not self.installed():
             return {"ok": False, "detail": f"Not installed. {self.install}"}
-        if self.id == "chatterbox":
-            try:
-                from perth.perth_net import PerthImplicitWatermarker  # noqa: F401
-            except ImportError as error:
-                return {
-                    "ok": False,
-                    "detail": (
-                        "Installed but broken on this Python: the perth watermarker "
-                        f"cannot import librosa.resample ({error}). Use Python 3.10-3.12 "
-                        "with the versions chatterbox-tts pins, or install Qwen3-TTS instead."
-                    ),
-                }
         if self.id == "kokoro":
             import shutil
 
@@ -147,39 +269,42 @@ ENGINES: Dict[str, EngineSpec] = {
         ),
         EngineSpec(
             id="chatterbox",
-            label="Chatterbox (Resemble AI)",
+            label="Chatterbox Multilingual v3 (MLX)",
             license="MIT",
             commercial=True,
             cloning=True,
-            languages="English (Turbo), 23 languages (Multilingual)",
+            languages="23 languages",
             download="~1-2 GB",
-            memory="~4-7 GB, runs on MPS or CPU",
-            install="pip install chatterbox-tts",
-            module="chatterbox",
+            memory="~4-7 GB on Apple Silicon",
+            install=MLX_INSTALL,
+            module="mlx_audio",
             notes=(
-                "The voice cloning engine: give it 5-10 seconds of clean reference "
-                "audio and it speaks new text in that voice. Slower on Apple Silicon "
-                "than on a GPU, but it works."
+                "Runs in the isolated MLX runtime, avoiding the PyTorch Chatterbox "
+                "dependency conflict with VibeVoice. Give it 5-10 seconds of clean "
+                "reference audio to clone a voice; delivery uses exaggeration and CFG."
             ),
         ),
         EngineSpec(
             id="qwen3-tts",
-            label="Qwen3-TTS 0.6B / 1.7B (MLX)",
+            label="Qwen3-TTS 1.7B (MLX)",
             license="Apache-2.0",
             commercial=True,
             cloning=True,
             languages="10 languages, no Indian languages",
-            download="~2 GB (0.6B) or ~3 GB (1.7B)",
-            memory="~4 GB (0.6B) or ~6-8 GB (1.7B)",
-            install="pip install mlx-audio",
+            download="~2 GB per 8-bit CustomVoice/Base model",
+            memory="~4-6 GB per loaded model on Apple Silicon",
+            install=MLX_INSTALL,
             module="mlx_audio",
             notes=(
-                "Recommended next step, not wired into the API yet: the fastest "
-                "cloning engine on Apple Silicon because it runs on MLX instead of "
-                "PyTorch MPS. The 0.6B checkpoint clones noticeably worse than the "
-                "1.7B, so use 1.7B if quality matters."
+                "CustomVoice provides nine preset voices and natural-language delivery "
+                "control. Base performs voice cloning and requires the exact reference "
+                "transcript, so no separate Whisper model is downloaded. Models stay "
+                "loaded in the isolated MLX worker between requests."
             ),
-            wired=False,
+            default_voices=[
+                "Ryan", "Aiden", "Vivian", "Serena", "Uncle_Fu",
+                "Dylan", "Eric", "Ono_Anna", "Sohee",
+            ],
         ),
     ]
 }
@@ -220,23 +345,9 @@ def _to_wav_bytes(samples: np.ndarray, sample_rate: int) -> bytes:
     return buffer.read()
 
 
-def _device() -> str:
-    try:
-        import torch
-
-        if torch.backends.mps.is_available():
-            return "mps"
-        if torch.cuda.is_available():
-            return "cuda"
-    except Exception:
-        pass
-    return "cpu"
-
-
 # ============== Adapters ==============
 
 _kokoro_pipelines: Dict[str, Any] = {}
-_chatterbox_models: Dict[str, Any] = {}
 
 
 def _synthesize_kokoro(text: str, voice: str, speed: float) -> bytes:
@@ -262,36 +373,32 @@ def _synthesize_kokoro(text: str, voice: str, speed: float) -> bytes:
     return _to_wav_bytes(np.concatenate(chunks), 24000)
 
 
-def _synthesize_chatterbox(
+def _synthesize_mlx(
+    engine_id: str,
     text: str,
+    voice: Optional[str],
     reference_path: Optional[str],
+    reference_text: Optional[str],
+    speed: float,
     exaggeration: float,
     cfg_weight: float,
+    language: str,
+    style: str,
 ) -> bytes:
-    spec = ENGINES["chatterbox"]
+    spec = get_engine(engine_id)
     _require(spec)
-    import torch
-    from chatterbox.tts import ChatterboxTTS
-
-    device = _device()
-    model = _chatterbox_models.get(device)
-    if model is None:
-        model = ChatterboxTTS.from_pretrained(device=device)
-        _chatterbox_models[device] = model
-
-    kwargs: Dict[str, Any] = {
+    return _mlx_worker.synthesize({
+        "engine": engine_id,
+        "text": text,
+        "voice": voice,
+        "reference_path": reference_path,
+        "reference_text": reference_text,
+        "speed": speed,
         "exaggeration": exaggeration,
         "cfg_weight": cfg_weight,
-    }
-    if reference_path:
-        kwargs["audio_prompt_path"] = reference_path
-
-    with torch.inference_mode():
-        wav = model.generate(text, **kwargs)
-
-    samples = wav.squeeze().cpu().numpy() if hasattr(wav, "cpu") else np.asarray(wav)
-    sample_rate = int(getattr(model, "sr", 24000))
-    return _to_wav_bytes(samples, sample_rate)
+        "language": language,
+        "style": style,
+    })
 
 
 def synthesize(
@@ -302,10 +409,13 @@ def synthesize(
     speed: float = 1.0,
     exaggeration: float = 0.5,
     cfg_weight: float = 0.5,
+    language: str = "en",
+    style: str = "neutral",
+    reference_text: Optional[str] = None,
 ) -> bytes:
     """Render text with an optional engine and return WAV bytes.
 
-    ``reference_path`` is the audio to clone from, for engines that support it.
+    ``reference_path`` and ``reference_text`` describe a consented voice clone.
     """
     if not text.strip():
         raise ValueError("text is empty")
@@ -313,8 +423,11 @@ def synthesize(
     spec = get_engine(engine_id)
     if engine_id == "kokoro":
         return _synthesize_kokoro(text, voice or "", speed)
-    if engine_id == "chatterbox":
-        return _synthesize_chatterbox(text, reference_path, exaggeration, cfg_weight)
+    if engine_id in MLX_ENGINES:
+        return _synthesize_mlx(
+            engine_id, text, voice, reference_path, reference_text,
+            speed, exaggeration, cfg_weight, language, style,
+        )
     if engine_id == "vibevoice":
         raise EngineUnavailable(
             "vibevoice",

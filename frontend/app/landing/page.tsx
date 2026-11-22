@@ -38,7 +38,7 @@ import {
 const PROMO_AUDIO = {
   title: "Hear Podcast Brain Pro in Action",
   subtitle: "AI-narrated product story",
-  file: "/samples/podcast-brain-pro-promo.wav",
+  file: "/samples/podcast-brain-pro-promo.m4a",
 };
 
 const SAMPLES = [
@@ -46,7 +46,7 @@ const SAMPLES = [
     lang: "English",
     flag: "🇺🇸",
     title: "Interview — AI Future Discussion",
-    file: "/samples/english-interview.wav",
+    file: "/samples/english-interview.m4a",
     staticDuration: "5:12",
     format: "Interview",
     model: "Longform 1.5B",
@@ -55,7 +55,7 @@ const SAMPLES = [
     lang: "English",
     flag: "🇺🇸",
     title: "Panel — Technology Trends",
-    file: "/samples/english-panel.wav",
+    file: "/samples/english-panel.m4a",
     staticDuration: "3:42",
     format: "Panel",
     model: "Longform 1.5B",
@@ -64,7 +64,7 @@ const SAMPLES = [
     lang: "Hindi",
     flag: "🇮🇳",
     title: "Nation Building: India vs China",
-    file: "/samples/hindi-nation-building.wav",
+    file: "/samples/hindi-nation-building.m4a",
     staticDuration: "4:49",
     format: "Interview",
     model: "Sarvam Bulbul",
@@ -73,7 +73,7 @@ const SAMPLES = [
     lang: "Hindi",
     flag: "🇮🇳",
     title: "Delhi Air Pollution & Government",
-    file: "/samples/hindi-delhi-air.wav",
+    file: "/samples/hindi-delhi-air.m4a",
     staticDuration: "4:04",
     format: "Panel",
     model: "Sarvam Bulbul",
@@ -82,7 +82,7 @@ const SAMPLES = [
     lang: "Kannada",
     flag: "🇮🇳",
     title: "Bangalore News Update",
-    file: "/samples/kannada-bangalore-news.wav",
+    file: "/samples/kannada-bangalore-news.m4a",
     staticDuration: "3:04",
     format: "Interview",
     model: "Sarvam Bulbul",

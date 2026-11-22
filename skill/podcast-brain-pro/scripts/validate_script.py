@@ -94,7 +94,7 @@ def validate(data: object) -> tuple[list[str], list[str]]:
             errors.append(f"{where} has empty content")
             continue
 
-        total_words += len(content.split())
+        total_words += len(DIRECTIVE_PATTERN.sub(" ", content).split())
 
         spoken = DIRECTIVE_PATTERN.sub(" ", content)
         if STAGE_PATTERN.search(spoken) or BULLET_INLINE.search(spoken):
@@ -143,13 +143,13 @@ def validate(data: object) -> tuple[list[str], list[str]]:
             f"{total_words} words is over the {duration}-minute budget ({budget})"
         )
 
-    if language != "en" and not any(
+    if language != "en" and any(
         re.search(r"[A-Za-z]{4,}", turn.get("content", ""))
         for turn in script
         if isinstance(turn, dict)
     ):
         warnings.append(
-            f"language is {language} but no long Latin-script words appear in the script"
+            f"language is {language} but long Latin-script words appear; verify they are intentional"
         )
 
     return errors, warnings

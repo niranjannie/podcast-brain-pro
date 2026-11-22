@@ -207,7 +207,7 @@ def build_units(
     index_of = {name: index + 1 for index, name in enumerate(order)}
 
     units: List[Dict[str, Any]] = []
-    for turn in turns:
+    for turn_index, turn in enumerate(turns):
         speaker = turn["speaker"]
         for unit in split_units(turn["content"], default_style=default_style):
             if not unit["text"]:
@@ -216,6 +216,7 @@ def build_units(
                 {
                     "speaker": speaker,
                     "speaker_id": index_of[speaker],
+                    "turn_index": turn_index,
                     "text": unit["text"],
                     "style": unit["style"],
                     "pause_after": unit["pause_after"],
@@ -224,7 +225,9 @@ def build_units(
     return units
 
 
-def group_units(units: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def group_units(
+    units: Sequence[Dict[str, Any]], break_before_turns: Optional[set] = None
+) -> List[Dict[str, Any]]:
     """Merge consecutive units of the same speaker and style into one turn.
 
     A pause between two units of the same speaker keeps them apart, because the pause
@@ -237,6 +240,7 @@ def group_units(units: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
             and grouped[-1]["speaker"] == unit["speaker"]
             and grouped[-1]["style"] == unit["style"]
             and not grouped[-1].get("pause_after")
+            and (not break_before_turns or unit.get("turn_index") not in break_before_turns)
         ):
             grouped[-1]["text"] = (grouped[-1]["text"] + " " + unit["text"]).strip()
             grouped[-1]["pause_after"] = unit["pause_after"]
@@ -261,8 +265,77 @@ def split_sentences(text: str) -> List[str]:
     return parts or ([text.strip()] if text.strip() else [])
 
 
+def split_monologue_turns(
+    text: str, speaker: str = "Host", target_words: int = 70
+) -> List[Dict[str, str]]:
+    """Split a monologue into paragraph-sized turns without changing its wording."""
+    groups: List[str] = []
+    current: List[str] = []
+    current_words = 0
+    for sentence in split_sentences(text):
+        words = len(sentence.split())
+        if current and current_words + words > target_words:
+            groups.append(" ".join(current))
+            current = []
+            current_words = 0
+        current.append(sentence)
+        current_words += words
+    if current:
+        groups.append(" ".join(current))
+    return [{"speaker": speaker, "content": group} for group in groups if group.strip()]
+
+
+def chunk_units_for_engine(
+    units: Sequence[Dict[str, Any]], max_words: int
+) -> List[Dict[str, Any]]:
+    """Bound single-voice engine calls while preserving speaker, style and pauses.
+
+    Sentences are grouped up to ``max_words``. An unusually long sentence is split on
+    word boundaries rather than silently exceeding the model's generation limit.
+    """
+    max_words = max(1, int(max_words))
+    bounded: List[Dict[str, Any]] = []
+    for unit in units:
+        text_pieces: List[str] = []
+        current: List[str] = []
+        current_words = 0
+
+        def flush() -> None:
+            nonlocal current, current_words
+            if current:
+                text_pieces.append(" ".join(current))
+                current = []
+                current_words = 0
+
+        for sentence in split_sentences(unit["text"]):
+            words = sentence.split()
+            if len(words) > max_words:
+                flush()
+                for start in range(0, len(words), max_words):
+                    text_pieces.append(" ".join(words[start:start + max_words]))
+            elif current and current_words + len(words) > max_words:
+                flush()
+                current = words
+                current_words = len(words)
+            else:
+                current.append(sentence)
+                current_words += len(words)
+        flush()
+
+        for index, text in enumerate(text_pieces):
+            bounded.append({
+                **unit,
+                "text": text,
+                "pause_after": unit.get("pause_after", 0.0)
+                if index == len(text_pieces) - 1 else 0.0,
+            })
+    return bounded
+
+
 def plan_generation(
-    grouped: Sequence[Dict[str, Any]], max_words: int
+    grouped: Sequence[Dict[str, Any]],
+    max_words: int,
+    break_before_turns: Optional[set] = None,
 ) -> List[List[Dict[str, Any]]]:
     """Plan the synthesis passes for a grouped script.
 
@@ -298,6 +371,8 @@ def plan_generation(
             current = []
 
     for unit in expanded:
+        if current and break_before_turns and unit.get("turn_index") in break_before_turns:
+            flush()
         unit_words = len(unit["text"].split())
         current_words = sum(len(u["text"].split()) for u in current)
         if current and (

@@ -1,10 +1,12 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { Studio } from "@/lib/useStudio";
 import { Format, Language } from "@/lib/studio-types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorBanner, Field, SectionTitle, Select, TextArea, TextInput } from "./ui";
+import { ExtrasView } from "./ExtrasView";
 import {
   AudioLines,
   Clock,
@@ -40,15 +42,36 @@ const LANGUAGES: { value: Language; label: string }[] = [
 ];
 
 export function CreateView({ studio }: { studio: Studio }) {
+  const [previewing, setPreviewing] = useState<number | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewResults, setPreviewResults] = useState<Record<number, { url: string; filename: string; key: string }>>({});
+  const previewResultsRef = useRef<Record<number, { url: string; filename: string; key: string }>>({});
+  const previewsMountedRef = useRef(true);
+
+  useEffect(() => {
+    previewsMountedRef.current = true;
+    return () => {
+      previewsMountedRef.current = false;
+      Object.values(previewResultsRef.current).forEach((result) => URL.revokeObjectURL(result.url));
+    };
+  }, []);
   const audioDisabledReason = !studio.script
     ? "Generate a script first"
     : studio.isGeneratingAudio
       ? "Generation in progress"
       : studio.isIndic && !studio.config.SARVAM_API_KEY?.configured
         ? "Add a Sarvam key in Keys to render Indian languages"
-        : !studio.isIndic && !studio.modelCached
-          ? "The model is still downloading"
-          : null;
+        : !studio.isIndic && !studio.usesVibeVoice && !studio.selectedEngineInfo?.health?.ok
+          ? "Install and check this engine in Voice Lab"
+          : studio.episodeEngine === "chatterbox" && studio.availableVoices.length === 0
+            ? "Create a consented Chatterbox voice in Voice Lab first"
+            : !studio.isIndic && studio.usesVibeVoice && !studio.modelCached
+              ? "The model is still downloading"
+              : null;
+  const engineOptions = studio.engines.filter(
+    (engine) => engine.wired && engine.installed && engine.health?.ok
+  );
+  const selectedEngineMissing = !engineOptions.some((engine) => engine.id === studio.episodeEngine);
 
   return (
     <div className="space-y-6">
@@ -72,7 +95,7 @@ export function CreateView({ studio }: { studio: Studio }) {
             )}
           </Field>
 
-          <div className="grid sm:grid-cols-3 gap-4">
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <Field label="Format">
               {(id) => (
                 <Select id={id} value={studio.format} onChange={(e) => studio.setFormat(e.target.value as Format)}>
@@ -92,6 +115,31 @@ export function CreateView({ studio }: { studio: Studio }) {
                       {item.label}
                     </option>
                   ))}
+                </Select>
+              )}
+            </Field>
+            <Field label="Engine" hint={studio.isIndic ? "Indian languages use Sarvam" : "VibeVoice, lightweight presets, or your cloned voices"}>
+              {(id) => (
+                <Select
+                  id={id}
+                  value={studio.isIndic ? "sarvam" : studio.episodeEngine}
+                  disabled={studio.isIndic}
+                  onChange={(e) => studio.setEpisodeEngine(e.target.value)}
+                >
+                  {studio.isIndic ? (
+                    <option value="sarvam">Sarvam Cloud</option>
+                  ) : (
+                    <>
+                      {selectedEngineMissing && (
+                        <option value={studio.episodeEngine} disabled>
+                          {studio.selectedEngineInfo?.label ?? studio.episodeEngine} (unavailable)
+                        </option>
+                      )}
+                      {engineOptions.map((engine) => (
+                        <option key={engine.id} value={engine.id}>{engine.label}</option>
+                      ))}
+                    </>
+                  )}
                 </Select>
               )}
             </Field>
@@ -146,11 +194,7 @@ export function CreateView({ studio }: { studio: Studio }) {
                   <TextInput
                     id={id}
                     value={studio.speakerNames[index] ?? ""}
-                    onChange={(e) => {
-                      const next = [...studio.speakerNames];
-                      next[index] = e.target.value;
-                      studio.setSpeakerNames(next);
-                    }}
+                    onChange={(e) => studio.renameSpeaker(index, e.target.value)}
                   />
                 )}
               </Field>
@@ -173,13 +217,54 @@ export function CreateView({ studio }: { studio: Studio }) {
                   </Select>
                 )}
               </Field>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={previewing !== null || !studio.voiceSelections[index]}
+                onClick={async () => {
+                  setPreviewing(index);
+                  setPreviewError(null);
+                  try {
+                    const voice = studio.voiceSelections[index];
+                    const key = `${studio.episodeEngine}:${voice}:${speaker}:${studio.language}:${studio.deliveryStyle}`;
+                    const result = await studio.auditionVoice(voice, speaker);
+                    if (!previewsMountedRef.current) {
+                      URL.revokeObjectURL(result.url);
+                      return;
+                    }
+                    const previous = previewResultsRef.current[index];
+                    if (previous) URL.revokeObjectURL(previous.url);
+                    const next = { ...previewResultsRef.current, [index]: { ...result, key } };
+                    previewResultsRef.current = next;
+                    setPreviewResults(next);
+                  } catch (error) {
+                    if (previewsMountedRef.current) setPreviewError(error instanceof Error ? error.message : String(error));
+                  } finally {
+                    if (previewsMountedRef.current) setPreviewing(null);
+                  }
+                }}
+              >
+                <Play className="w-3.5 h-3.5" />
+                {previewing === index ? "Rendering preview..." : "Preview voice"}
+              </Button>
+              {previewResults[index]?.key === `${studio.episodeEngine}:${studio.voiceSelections[index]}:${speaker}:${studio.language}:${studio.deliveryStyle}` && (
+                <audio
+                  key={previewResults[index].url}
+                  controls
+                  className="w-full h-9"
+                  src={previewResults[index].url}
+                  aria-label={`Preview ${speaker}`}
+                />
+              )}
             </div>
           ))}
         </div>
+        {previewError && (
+          <div className="mt-3"><ErrorBanner message={previewError} onDismiss={() => setPreviewError(null)} /></div>
+        )}
         {studio.isIndic && (
           <p className="text-[11px] text-muted mt-3">
-            Indian languages are rendered by Sarvam as a single narrator today. Multi-host Indian
-            episodes are on the roadmap.
+            Sarvam renders each turn with the selected speaker voice, then stitches the conversation with its pauses and delivery settings.
           </p>
         )}
       </section>
@@ -279,6 +364,8 @@ export function CreateView({ studio }: { studio: Studio }) {
           </p>
         )}
       </section>
+
+      <ExtrasView studio={studio} />
 
       {/* Audio */}
       <section className="panel p-5 sm:p-6">

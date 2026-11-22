@@ -32,8 +32,8 @@ Podcast Brain Pro is a **FastAPI backend** with a **React/Next.js frontend**. It
 
 | Layer | Technology |
 |-------|------------|
-| Backend | Python 3.10+, FastAPI, Uvicorn |
-| TTS | Microsoft VibeVoice (Realtime 0.5B, Longform 1.5B) |
+| Backend | Python 3.12 recommended, FastAPI, Uvicorn |
+| TTS | VibeVoice, Kokoro, Qwen3-TTS/Chatterbox via isolated MLX worker, Sarvam |
 | LLM Routing | Requests + custom fallback chain |
 | Frontend (Primary) | Next.js 14, React, Tailwind CSS, Framer Motion, GSAP |
 | Frontend (Fallback) | Single-file HTML/CSS/JS (zero build) |
@@ -53,8 +53,14 @@ podcast-brain-pro/
 │   └── CONTRIBUTING.md
 ├── voice-service/
 │   ├── main.py                      # FastAPI app + endpoints
-│   ├── rss_generator.py             # RSS feed generator
-│   ├── requirements.txt             # Python dependencies
+│   ├── script_pipeline.py           # Turns, directives, chapter-aware planning, voices
+│   ├── content_pipeline.py          # Show notes, chapters, captions, social clip plans
+│   ├── engines.py                   # Engine catalogue + persistent MLX worker client
+│   ├── mlx_worker.py                # Qwen3-TTS/Chatterbox in isolated .venv-mlx
+│   ├── audio_pipeline.py            # Loudness, PCM stitching, WAV duration
+│   ├── requirements.txt             # Main/VibeVoice Python dependencies
+│   ├── requirements-mlx.txt         # Isolated current MLX Audio dependencies
+│   ├── rss_generator.py             # RSS + transcript/chapter links
 │   ├── start.sh                     # Startup script
 │   └── .env.example                 # Example environment config
 ├── frontend/                        # React/Next.js app
@@ -80,14 +86,19 @@ This keeps the git repository lightweight (~1 MB) while providing state-of-the-a
 
 ## Audio Engine Selection
 
-The frontend automatically picks the right TTS engine:
+The Create view exposes the installed, healthy engines. VibeVoice remains the original
+English workflow; Kokoro/Qwen/Chatterbox render per turn through `/tts/longform`, while
+Sarvam renders Indian-language turns with per-speaker voices.
 
-| Format | Duration | Language | Engine | Speed on M4 |
-|--------|----------|----------|--------|-------------|
-| Monologue | ≤10 min | English | Realtime 0.5B | ~30–90s |
-| Monologue | >10 min | English | Longform 1.5B | ~5–15 min |
-| Interview/Panel | Any | English | Longform 1.5B | ~5–15 min |
-| Any | Any | Indian | Sarvam Bulbul v3 | ~30–90s |
+| Selection | Language | Path |
+|-----------|----------|------|
+| VibeVoice Realtime 0.5B | English monologue ≤10 min | `/tts/realtime` |
+| VibeVoice Longform 1.5B | English multi-host or >10 min | `/tts/longform` |
+| Kokoro / Qwen3-TTS / Chatterbox | Supported local languages, mono or multi-host | `/tts/engine` preview or `/tts/longform` dialogue |
+| Sarvam Bulbul | Indian languages, mono or multi-host | `/tts/sarvam` |
+
+Qwen/Chatterbox use a persistent subprocess in `.venv-mlx`; the main process retains
+VibeVoice's incompatible `transformers<5` dependency. Models stay loaded between calls.
 
 ## LLM Fallback Chain
 
@@ -112,14 +123,18 @@ GitHub Models was removed from the chain: its inference API was retired on 30 Ju
 understands:
 
 - `normalize_turns()` accepts a turn keyed `speaker` or `role` and normalises it once.
-- `build_units()` assigns global speaker numbers that never change between chunks.
+- `build_units()` assigns global speaker numbers and source turn indexes that never change between chunks.
 - Delivery directives: `[[pause:0.8]]` (real silence) and `[[style:calm]]` (delivery
-  settings), applied on the local, realtime and Sarvam paths.
-- `resolve_voices()` maps every speaker to its own voice file: an explicit
-  `voice_names` entry first, then a name match, then a round robin over what is left.
+  settings), applied on VibeVoice, optional local engines, and Sarvam.
+- Chapter start turns force generation-segment boundaries, so measured segment durations
+  produce real chapter timestamps.
 
-`audio_pipeline.py` normalises every export to -16 LUFS with a -1.5 dBTP ceiling and
-measures the result.
+`content_pipeline.py` validates one LLM-generated metadata pass into show notes, chapters,
+five captions, and source-grounded clip turn ranges. `/podcast/extras` refreshes that data
+without rewriting the script.
+
+`audio_pipeline.py` normalises exports to -16 LUFS with a -1.5 dBTP ceiling, stitches valid
+PCM WAVs, and measures actual frame durations.
 
 ## Key Endpoints
 
@@ -127,13 +142,17 @@ measures the result.
 |----------|--------|-------------|
 | `/` | GET | Web UI (HTML fallback) |
 | `/health` | GET | Device status & loaded models |
-| `/voices` | GET | Voice presets on disk and the delivery styles |
+| `/voices` | GET | VibeVoice presets, consented cloned voices, delivery styles |
+| `/engines` | GET | Engine licences, install state, runtime health, preset voices |
 | `/config` | GET/POST | API key management |
-| `/podcast/generate` | POST | Research + script generation |
+| `/podcast/generate` | POST | Research + script + optional content extras |
+| `/podcast/extras` | POST | Refresh extras without rewriting the script |
 | `/podcast/history` | GET | List generated episodes |
-| `/tts/realtime` | POST | Single-speaker fast TTS |
-| `/tts/longform` | POST | Multi-speaker high-quality TTS |
-| `/tts/sarvam` | POST | Indian-language cloud TTS |
+| `/tts/realtime` | POST | Single-speaker VibeVoice TTS |
+| `/tts/engine` | POST | Kokoro/Qwen/Chatterbox single-voice preview |
+| `/tts/clone` | POST | Consent-gated Qwen/Chatterbox cloning |
+| `/tts/longform` | POST | Multi-speaker VibeVoice/Kokoro/Qwen/Chatterbox TTS |
+| `/tts/sarvam` | POST | Single- or multi-speaker Indian-language cloud TTS |
 | `/asr` | POST | Speech-to-text transcription |
 
 ## Concurrency & Safety
@@ -143,6 +162,7 @@ The backend uses several mechanisms to ensure stable operation under load:
 | Mechanism | Purpose |
 |-----------|---------|
 | `_tts_generation_lock` | Serializes all `model.generate()` calls to prevent DPMSolver scheduler race conditions |
+| Persistent `MLXWorker` | Serializes Qwen/Chatterbox requests over a clean JSON channel, caches models, and terminates/restarts failed workers |
 | `_tts_executor` (ThreadPoolExecutor, max_workers=2) | Offloads sync inference from the async event loop — prevents frontend timeouts |
 | Per-model load locks (`_realtime_load_lock`, `_asr_load_lock`, `_longform_load_lock`) | Prevents concurrent model initialization races |
 | `_mps_cleanup()` | Flushes MPS memory cache after every inference to prevent GPU memory leaks |
@@ -154,4 +174,5 @@ The backend uses several mechanisms to ensure stable operation under load:
 - Keys are **masked** in the `/config` endpoint (only first/last 4 chars shown).
 - Empty/None speaker names are filtered out before regex processing.
 - Path traversal is prevented in metadata file operations (`os.path.splitext` instead of string replacement).
+- Voice cloning requires explicit consent and stores a consent record; reference IDs resolve only to existing consented records, with basename path containment.
 - No telemetry or tracking is implemented.

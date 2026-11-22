@@ -97,6 +97,13 @@ OPENROUTER_MODEL=some/model:free
 
 ---
 
+## Local voice engines (no API key)
+
+Kokoro, Qwen3-TTS, and Chatterbox run locally. Install Kokoro in the main environment;
+for Qwen/Chatterbox on Apple Silicon use `.venv-mlx` and `requirements-mlx.txt` as shown in
+`docs/SETUP.md`. Qwen cloning requires a reference transcript; every clone requires consent.
+VibeVoice loads only when selected unless `LONGFORM_PRELOAD_AT_STARTUP=true`.
+
 ## Configuring Keys
 
 You have two options:

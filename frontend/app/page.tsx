@@ -33,7 +33,7 @@ export default function StudioPage() {
       <PageHeader title={TITLES[view].title} subtitle={TITLES[view].subtitle} />
 
       {view === "create" && <CreateView studio={studio} />}
-      {view === "library" && <LibraryView studio={studio} />}
+      {view === "library" && <LibraryView studio={studio} onEdit={() => setView("create")} />}
       {view === "voicelab" && <VoiceLabView studio={studio} />}
 
       <SettingsModal

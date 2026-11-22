@@ -1,0 +1,8 @@
+# Install this file in a separate Python 3.12 environment:
+#   python3.12 -m venv .venv-mlx
+#   .venv-mlx/bin/pip install -r requirements-mlx.txt
+# Keep this separate from requirements.txt: current MLX Audio needs transformers>=5.14,
+# while the vendored VibeVoice engine needs transformers<5.
+mlx-audio[tts]==0.6.7
+scipy>=1.10.0
+soundfile>=0.13.1

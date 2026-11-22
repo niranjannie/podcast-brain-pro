@@ -98,11 +98,13 @@ from pydub import AudioSegment
 from scipy.io import wavfile
 
 # Shared script contract: turn keys, delivery directives, chunking, voice resolution.
-from audio_pipeline import measure_loudness, normalize_loudness
-from engines import EngineUnavailable, list_engines, synthesize
+from audio_pipeline import measure_loudness, normalize_loudness, stitch_wav_bytes, wav_duration_seconds
+from content_pipeline import generate_content_extras, with_chapter_timing
+from engines import EngineUnavailable, get_engine, list_engines, synthesize
 from script_pipeline import (
     DEFAULT_STYLE,
     build_units,
+    chunk_units_for_engine,
     group_units,
     list_voices,
     normalize_turns,
@@ -111,6 +113,7 @@ from script_pipeline import (
     segment_gap_seconds,
     speaker_order,
     split_sentences,
+    split_monologue_turns,
     split_units,
     style_cfg_multiplier,
     style_names,
@@ -228,7 +231,7 @@ ASR_PRELOAD_AT_STARTUP = os.environ.get("ASR_PRELOAD_AT_STARTUP", "false").lower
 
 # Longform TTS readiness flag
 longform_ready = threading.Event()
-LONGFORM_PRELOAD_AT_STARTUP = os.environ.get("LONGFORM_PRELOAD_AT_STARTUP", "true").lower() in ("true", "1", "yes")
+LONGFORM_PRELOAD_AT_STARTUP = os.environ.get("LONGFORM_PRELOAD_AT_STARTUP", "false").lower() in ("true", "1", "yes")
 
 # Detect best device for M4 Mac
 def get_device():
@@ -367,17 +370,22 @@ class TTSRealtimeRequest(BaseModel):
     topic: Optional[str] = None
     format: Optional[str] = "monologue"
     language: Optional[str] = "en"
+    duration_minutes: Optional[int] = None
     style: Optional[str] = None  # episode wide delivery style, directives can override
+    extras: Optional[Dict[str, Any]] = None
 
 class TTSLongformRequest(BaseModel):
     script: List[Dict[str, Any]] = Field(..., min_length=1)  # [{"speaker": "Host", "content": "Hello"}]
     voice_names: Optional[List[str]] = None
+    engine: str = "vibevoice"
     cfg_scale: Optional[float] = 1.3
     save_to_disk: Optional[bool] = True
     topic: Optional[str] = None
     format: Optional[str] = "interview"
     language: Optional[str] = "en"
+    duration_minutes: Optional[int] = None
     style: Optional[str] = None  # episode wide delivery style, directives can override
+    extras: Optional[Dict[str, Any]] = None
 
 LANGUAGE_MAP = {
     "en": "English",
@@ -397,6 +405,7 @@ LANGUAGE_MAP = {
 SARVAM_LANGUAGE_CODES = {
     "od-IN": "or-IN",
 }
+SARVAM_DEFAULT_VOICES = ["shubh", "shreya", "manan"]
 
 class PodcastGenerateRequest(BaseModel):
     topic: str
@@ -405,6 +414,7 @@ class PodcastGenerateRequest(BaseModel):
     speakers: Optional[List[str]] = Field(default=None, max_length=3)
     language: str = Field(default="en", pattern="^(en|hi-IN|ta-IN|te-IN|kn-IN|bn-IN|mr-IN|gu-IN|ml-IN|pa-IN|od-IN)$")
     style: Optional[str] = Field(default=None, pattern="^(neutral|calm|narrative|serious|warm|excited)$")
+    include_extras: bool = False
 
 class PodcastScriptResponse(BaseModel):
     topic: str
@@ -415,6 +425,15 @@ class PodcastScriptResponse(BaseModel):
     generation_time_seconds: float
     target_words: Optional[int] = None
     under_target: Optional[bool] = None
+    extras: Optional[Dict[str, Any]] = None
+    extras_error: Optional[str] = None
+
+class ContentExtrasRequest(BaseModel):
+    topic: str
+    script: List[Dict[str, Any]] = Field(..., min_length=1)
+    duration_minutes: int = Field(default=2, ge=2, le=30)
+    format: str = Field(default="monologue", pattern="^(monologue|interview|panel)$")
+    language: str = "en"
 
 class SarvamTTSRequest(BaseModel):
     text: str = Field(..., min_length=1)
@@ -428,9 +447,14 @@ class SarvamTTSRequest(BaseModel):
     topic: Optional[str] = None
     format: Optional[str] = "monologue"
     language: Optional[str] = "en"
+    duration_minutes: Optional[int] = None
     pitch: Optional[float] = Field(default=None, ge=-0.5, le=0.5)
     loudness: Optional[float] = Field(default=None, ge=0.1, le=2.5)
     dict_id: Optional[str] = None  # Sarvam pronunciation dictionary id
+    extras: Optional[Dict[str, Any]] = None
+    script: Optional[List[Dict[str, Any]]] = None
+    voice_names: Optional[List[str]] = None
+    style: Optional[str] = Field(default=None, pattern="^(neutral|calm|narrative|serious|warm|excited)$")
 
 # ============== Model Loaders ==============
 
@@ -590,6 +614,10 @@ def _finalize_audio(audio_bytes: bytes, metadata: Optional[Dict[str, Any]] = Non
     """
     normalized = normalize_loudness(audio_bytes, enabled=LOUDNESS_NORMALIZATION)
     if metadata is not None:
+        extras = metadata.get("extras")
+        if isinstance(extras, dict):
+            metadata.setdefault("title", extras.get("title"))
+            metadata.setdefault("description", extras.get("description"))
         # Record whether the export was really normalised: a missing ffmpeg used to
         # pass silently and publish whatever level the model produced.
         metadata["loudness_normalised"] = normalized is not audio_bytes
@@ -620,10 +648,16 @@ def _save_transcript_sidecar(
         base = os.path.splitext(audio_path)[0]
         path = f"{base}.transcript.json"
         payload = {
-            "title": metadata.get("topic") or os.path.basename(base),
+            "title": metadata.get("title") or metadata.get("topic") or os.path.basename(base),
+            "topic": metadata.get("topic"),
             "language": metadata.get("language"),
             "format": metadata.get("format"),
+            "duration_minutes": metadata.get("duration_minutes"),
             "duration_seconds": metadata.get("duration_seconds"),
+            "engine": metadata.get("engine"),
+            "voice_names": metadata.get("voice_names") or [],
+            "speaker_name": metadata.get("speaker_name"),
+            "extras": metadata.get("extras"),
             "script": [
                 {
                     "speaker": turn_speaker(item),
@@ -634,6 +668,25 @@ def _save_transcript_sidecar(
         }
         with open(path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, ensure_ascii=False)
+
+        extras = metadata.get("extras")
+        chapters = extras.get("chapters") if isinstance(extras, dict) else None
+        if chapters and all(
+            isinstance(chapter, dict) and isinstance(chapter.get("startTime"), (int, float))
+            for chapter in chapters
+        ):
+            chapter_payload = {
+                "version": "1.2.0",
+                "chapters": [
+                    {
+                        "startTime": round(float(chapter["startTime"]), 3),
+                        "title": chapter["title"],
+                    }
+                    for chapter in chapters
+                ],
+            }
+            with open(f"{base}.chapters.json", "w", encoding="utf-8") as handle:
+                json.dump(chapter_payload, handle, indent=2, ensure_ascii=False)
         return path
     except Exception as e:
         logger.warning("Could not write transcript sidecar: %s", e)
@@ -680,6 +733,7 @@ def save_to_outputs(audio_bytes: bytes, prefix: str = "podcast", metadata: Optio
         logger.warning("Could not read the WAV header for %s (%s); estimated duration", filename, e)
 
     if metadata:
+        metadata["duration_seconds"] = round(duration_seconds, 2)
         meta_path = os.path.splitext(path)[0] + ".json"
         meta_payload = {
             "created_at": datetime.now().isoformat(),
@@ -1112,10 +1166,25 @@ os.makedirs(OUTPUTS_DIR, exist_ok=True)
 app = FastAPI(title="AI_VOICEVIBE Voice Service", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        *[
+            origin.strip()
+            for origin in os.environ.get("FRONTEND_ORIGINS", "").split(",")
+            if origin.strip()
+        ],
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[
+        "X-Saved-Filename",
+        "X-Chunks-Used",
+        "X-Gen-Time-Sec",
+        "X-TTS-Provider",
+        "X-Language-Fallback",
+    ],
 )
 
 # Request ID middleware for log correlation
@@ -1199,9 +1268,20 @@ async def voices_catalog():
         for voice in list_voices(VOICES_DIR)
         if voice["ext"] == "pt"
     ]
+    cloned_voices = [
+        {
+            "id": voice["id"],
+            "language": voice["language"],
+            "gender": voice["gender"],
+            "name": voice["name"],
+            "engine": voice["engine"],
+        }
+        for voice in _consented_references()
+    ]
     return {
         "longform": longform_voices,
         "streaming": streaming_voices,
+        "cloned": cloned_voices,
         "styles": style_names(),
     }
 
@@ -1417,38 +1497,9 @@ def _generate_longform_chunk(
 
     return audio_bytes
 
-def _stitch_wav_bytes(chunks: List[bytes], silence_ms: int = 300, gaps_ms: Optional[List[int]] = None) -> bytes:
-    """Stitch WAV byte arrays with silence gaps. Returns combined WAV bytes.
-
-    ``gaps_ms`` optionally sets the silence after each chunk. A gap of 0 means the
-    chunks are joined without a break.
-    """
-    if not chunks:
-        return b""
-    if len(chunks) == 1:
-        return chunks[0]
-
-    segments = []
-    for chunk in chunks:
-        seg = AudioSegment.from_file(io.BytesIO(chunk), format="wav")
-        segments.append(seg)
-
-    final = segments[0]
-    for index, seg in enumerate(segments[1:]):
-        gap = gaps_ms[index] if gaps_ms and index < len(gaps_ms) else silence_ms
-        if gap > 0:
-            final = final + AudioSegment.silent(duration=gap) + seg
-        else:
-            final = final + seg
-
-    buf = io.BytesIO()
-    final.export(buf, format="wav")
-    buf.seek(0)
-    return buf.read()
-
 # ============== TTS Endpoints ==============
 
-def _do_tts_realtime_sync(text: str, speaker_name: Optional[str], cfg_scale: Optional[float], save_to_disk: Optional[bool], topic: Optional[str], format: Optional[str], language: Optional[str], style: Optional[str] = None) -> tuple:
+def _do_tts_realtime_sync(text: str, speaker_name: Optional[str], cfg_scale: Optional[float], save_to_disk: Optional[bool], topic: Optional[str], format: Optional[str], language: Optional[str], style: Optional[str] = None, extras: Optional[Dict[str, Any]] = None, duration_minutes: Optional[int] = None) -> tuple:
     """Synchronous helper for realtime TTS. Runs inside a thread pool.
     Returns (audio_bytes, saved_filename)."""
     processor, model = load_realtime_tts()
@@ -1534,16 +1585,31 @@ def _do_tts_realtime_sync(text: str, speaker_name: Optional[str], cfg_scale: Opt
     if len(audios) == 1:
         audio_bytes = audios[0]
     else:
-        audio_bytes = _stitch_wav_bytes(audios, silence_ms=0, gaps_ms=gaps_ms)
+        audio_bytes = stitch_wav_bytes(audios, silence_ms=0, gaps_ms=gaps_ms)
 
     saved_filename = None
     if save_to_disk:
         word_count = len(text.split())
-        meta = {"word_count": word_count, "speaker_name": speaker_name, "format": format, "language": language}
+        meta = {"word_count": word_count, "speaker_name": speaker_name, "voice_names": [voice_id], "format": format, "language": language, "duration_minutes": duration_minutes, "engine": "vibevoice"}
+        if extras:
+            chapters = extras.get("chapters") or []
+            if chapters:
+                if len(chapters) != 1 or chapters[0].get("start_turn") != 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Realtime monologue chapters must contain only the opening chapter.",
+                    )
+                extras = with_chapter_timing(extras, {0: 0.0})
+            meta["extras"] = extras
         if topic:
             meta["topic"] = topic
         audio_bytes = _finalize_audio(audio_bytes, meta)
         saved_filename = save_to_outputs(audio_bytes, prefix="podcast_realtime", metadata=meta)
+        _save_transcript_sidecar(
+            saved_filename,
+            [{"speaker": speaker_name or "Host", "content": text}],
+            meta,
+        )
 
     return audio_bytes, saved_filename
 
@@ -1554,7 +1620,7 @@ async def tts_realtime(req: TTSRealtimeRequest):
         loop = asyncio.get_event_loop()
         audio_bytes, saved_filename = await loop.run_in_executor(
             _tts_executor, _do_tts_realtime_sync,
-            req.text, req.speaker_name, req.cfg_scale, req.save_to_disk, req.topic, req.format, req.language, req.style
+            req.text, req.speaker_name, req.cfg_scale, req.save_to_disk, req.topic, req.format, req.language, req.style, req.extras, req.duration_minutes
         )
         headers = {"X-Saved-Filename": saved_filename} if saved_filename else {}
         return StreamingResponse(io.BytesIO(audio_bytes), media_type="audio/wav", headers=headers)
@@ -1569,6 +1635,40 @@ async def tts_realtime(req: TTSRealtimeRequest):
 REFERENCE_DIR = os.path.join(OUTPUT_DIR, "reference_voices")
 CONSENT_DIR = os.path.join(OUTPUT_DIR, "voice_consents")
 
+
+def _consented_references(engine_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """List reference voices that have a persisted consent record and existing audio."""
+    references: List[Dict[str, Any]] = []
+    if not os.path.isdir(CONSENT_DIR):
+        return references
+    for filename in sorted(os.listdir(CONSENT_DIR), reverse=True):
+        if not filename.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(CONSENT_DIR, filename), encoding="utf-8") as handle:
+                record = json.load(handle)
+            reference_name = os.path.basename(record["reference_audio"])
+            engine = record["engine"]
+            reference_path = os.path.join(REFERENCE_DIR, reference_name)
+            if engine_id and engine != engine_id:
+                continue
+            if not os.path.isfile(reference_path):
+                continue
+            references.append({
+                "id": reference_name,
+                "name": os.path.splitext(reference_name)[0],
+                "language": record.get("language") or "en",
+                "gender": "cloned",
+                "engine": engine,
+                "path": reference_path,
+                "reference_text": record.get("reference_text") or "",
+                "consent_record": filename,
+            })
+        except (OSError, ValueError, KeyError, TypeError):
+            logger.warning("Ignoring invalid voice consent record: %s", filename)
+    return references
+
+
 def _synthesize_engine_text(
     engine_id: str,
     text: str,
@@ -1577,13 +1677,16 @@ def _synthesize_engine_text(
     speed: float = 1.0,
     exaggeration: float = 0.5,
     cfg_weight: float = 0.5,
+    language: str = "en",
+    style: Optional[str] = None,
+    reference_text: Optional[str] = None,
 ) -> bytes:
     """Render text with an optional engine, honouring the delivery directives.
 
     Pauses become real silence between the rendered parts, exactly as they do on the
-    built-in VibeVoice paths.
+    built-in VibeVoice paths. Qwen also receives each part's style as an instruction.
     """
-    units = split_units(text)
+    units = split_units(text, default_style=style or DEFAULT_STYLE)
     if not units:
         raise HTTPException(status_code=400, detail="text is empty")
 
@@ -1596,33 +1699,53 @@ def _synthesize_engine_text(
             voice=voice,
             reference_path=reference_path,
             speed=speed,
-            exaggeration=exaggeration,
+            exaggeration=(
+                max(0.0, min(1.0, exaggeration * style_cfg_multiplier(unit["style"])))
+                if engine_id == "chatterbox" else exaggeration
+            ),
             cfg_weight=cfg_weight,
+            language=language,
+            style=unit["style"],
+            reference_text=reference_text,
         )
         audios.append(audio)
         gaps_ms.append(int(round((unit.get("pause_after") or 0.0) * 1000)))
 
     if len(audios) == 1:
         return audios[0]
-    return _stitch_wav_bytes(audios, silence_ms=0, gaps_ms=gaps_ms)
+    return stitch_wav_bytes(audios, silence_ms=0, gaps_ms=gaps_ms)
 
 class EngineTTSRequest(BaseModel):
     text: str = Field(..., min_length=1)
     engine: str = "kokoro"
     voice: Optional[str] = None
     speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    language: str = "en"
+    style: Optional[str] = Field(
+        default="neutral", pattern="^(neutral|calm|narrative|serious|warm|excited)$"
+    )
     save_to_disk: Optional[bool] = False
     topic: Optional[str] = None
 
 @app.get("/engines")
 async def engines_catalog():
     """List the optional local engines, what they cost and whether they are installed."""
-    return {"engines": list_engines()}
+    return {"engines": await asyncio.to_thread(list_engines)}
 
 @app.post("/tts/engine")
 async def tts_with_engine(req: EngineTTSRequest):
     """Synthesise with a small optional engine such as Kokoro or Chatterbox."""
     loop = asyncio.get_event_loop()
+    reference_path = None
+    reference_text = None
+    if req.voice and req.engine in ("qwen3-tts", "chatterbox"):
+        reference = next(
+            (voice for voice in _consented_references(req.engine) if voice["id"] == req.voice),
+            None,
+        )
+        if reference:
+            reference_path = reference["path"]
+            reference_text = reference["reference_text"]
     try:
         audio_bytes = await loop.run_in_executor(
             _tts_executor,
@@ -1630,8 +1753,13 @@ async def tts_with_engine(req: EngineTTSRequest):
             req.engine,
             req.text,
             req.voice,
-            None,
+            reference_path,
             req.speed,
+            0.5,
+            0.5,
+            req.language,
+            req.style,
+            reference_text,
         )
     except EngineUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e))
@@ -1661,6 +1789,8 @@ async def tts_clone(
     engine: str = Form("chatterbox"),
     consent: bool = Form(False),
     reference: UploadFile = File(...),
+    reference_text: Optional[str] = Form(None),
+    language: str = Form("en"),
     exaggeration: float = Form(0.5),
     cfg_weight: float = Form(0.5),
     save_to_disk: bool = Form(True),
@@ -1670,6 +1800,17 @@ async def tts_clone(
     Cloning is consent gated: the caller must confirm they own the voice or have
     permission to clone it, and the confirmation is stored with the reference file.
     """
+    try:
+        spec = get_engine(engine)
+    except KeyError:
+        raise HTTPException(status_code=400, detail=f"Unknown voice engine: {engine}")
+    if not spec.cloning:
+        raise HTTPException(status_code=400, detail=f"{spec.label} does not support voice cloning")
+    if engine == "qwen3-tts" and not (reference_text or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Qwen3-TTS requires the exact transcript of the reference recording.",
+        )
     if not consent:
         raise HTTPException(
             status_code=400,
@@ -1684,6 +1825,16 @@ async def tts_clone(
         raise HTTPException(status_code=400, detail="reference audio is empty")
     if len(data) > 25 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="reference audio must be under 25 MB")
+    try:
+        reference_audio = AudioSegment.from_file(io.BytesIO(data))
+    except Exception:
+        raise HTTPException(status_code=400, detail="reference audio could not be decoded")
+    reference_seconds = len(reference_audio) / 1000
+    if reference_seconds < 3 or reference_seconds > 60:
+        raise HTTPException(
+            status_code=400,
+            detail="reference audio must contain 3-60 seconds of clean speech",
+        )
 
     os.makedirs(REFERENCE_DIR, exist_ok=True)
     os.makedirs(CONSENT_DIR, exist_ok=True)
@@ -1697,14 +1848,24 @@ async def tts_clone(
         "created_at": datetime.now().isoformat(),
         "engine": engine,
         "reference_audio": os.path.basename(reference_path),
+        "reference_text": (reference_text or "").strip(),
+        "language": language,
         "text_characters": len(text),
         "statement": (
             "The caller confirmed that the reference voice is their own voice or that "
             "they have written permission from the speaker to clone it."
         ),
     }
-    with open(os.path.join(CONSENT_DIR, f"{stamp}.json"), "w", encoding="utf-8") as handle:
+    consent_path = os.path.join(CONSENT_DIR, f"{stamp}.json")
+    with open(consent_path, "w", encoding="utf-8") as handle:
         json.dump(consent_record, handle, indent=2)
+
+    def discard_clone_upload() -> None:
+        for path in (reference_path, consent_path):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
     loop = asyncio.get_event_loop()
     try:
@@ -1718,14 +1879,21 @@ async def tts_clone(
             1.0,
             exaggeration,
             cfg_weight,
+            language,
+            None,
+            reference_text,
         )
     except EngineUnavailable as e:
+        discard_clone_upload()
         raise HTTPException(status_code=503, detail=str(e))
     except KeyError as e:
+        discard_clone_upload()
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
+        discard_clone_upload()
         raise
     except Exception as e:
+        discard_clone_upload()
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1743,6 +1911,131 @@ async def tts_clone(
 
     headers = {"X-Saved-Filename": saved_filename} if saved_filename else {}
     return StreamingResponse(io.BytesIO(audio_bytes), media_type="audio/wav", headers=headers)
+
+def _do_tts_engine_script_sync(
+    req: TTSLongformRequest,
+    turns: List[Dict[str, str]],
+    _max_words: int,
+    req_id: str,
+) -> tuple:
+    """Render a multi-host script through a single-voice engine and stitch the turns."""
+    t0 = time.time()
+    if req.engine not in {"kokoro", "qwen3-tts", "chatterbox"}:
+        raise HTTPException(status_code=400, detail=f"Unsupported dialogue engine: {req.engine}")
+    spec = get_engine(req.engine)
+
+    speakers = speaker_order(turns)
+    requested = {
+        speaker: (req.voice_names[index] if req.voice_names and index < len(req.voice_names) else "")
+        for index, speaker in enumerate(speakers)
+    }
+    references = {
+        voice["id"]: voice for voice in _consented_references(req.engine)
+    }
+    if req.engine == "chatterbox" and not references:
+        raise HTTPException(
+            status_code=400,
+            detail="Clone and consent to at least one Chatterbox voice in Voice Lab first.",
+        )
+
+    assignments: Dict[str, Dict[str, Any]] = {}
+    used: set = set()
+    for speaker in speakers:
+        candidate = requested.get(speaker) or ""
+        reference = references.get(candidate)
+        voice_id = candidate if candidate in spec.default_voices else ""
+        if req.engine == "chatterbox" and reference is None:
+            reference = next(
+                (voice for key, voice in references.items() if key not in used), None
+            )
+        if not reference and not voice_id:
+            voice_id = next(
+                (voice for voice in spec.default_voices if voice not in used),
+                spec.default_voices[0] if spec.default_voices else "",
+            )
+        if reference:
+            if req.engine == "qwen3-tts" and not reference["reference_text"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Clone '{reference['name']}' has no stored reference transcript. "
+                        "Create it again in Voice Lab before using it in an episode."
+                    ),
+                )
+            voice_id = reference["id"]
+            assignments[speaker] = {
+                "id": voice_id,
+                "voice": None,
+                "reference_path": reference["path"],
+                "reference_text": reference["reference_text"],
+            }
+        elif voice_id:
+            assignments[speaker] = {
+                "id": voice_id,
+                "voice": voice_id,
+                "reference_path": None,
+                "reference_text": None,
+            }
+        else:
+            raise HTTPException(status_code=400, detail=f"No voice available for {speaker}")
+        used.add(voice_id)
+
+    req.voice_names = [assignments[name]["id"] for name in speakers]
+    log_audio_event(
+        "info", "ENGINE_DIALOGUE_PLAN",
+        extra={
+            "engine": req.engine,
+            "speakers": speakers,
+            "voices": {name: selected["voice"] or "consented-clone" for name, selected in assignments.items()},
+        },
+        req_id=req_id,
+    )
+
+    audios: List[bytes] = []
+    gaps_ms: List[int] = []
+    engine_word_limit = {"chatterbox": 180, "qwen3-tts": 500, "kokoro": 300}[req.engine]
+    units = chunk_units_for_engine(
+        build_units(turns, default_style=req.style or DEFAULT_STYLE),
+        min(_max_words, engine_word_limit),
+    )
+    chapter_turns = {
+        chapter["start_turn"] for chapter in (req.extras or {}).get("chapters", [])
+    }
+    chapter_starts: Dict[int, float] = {}
+    elapsed = 0.0
+    for unit in units:
+        turn_index = unit["turn_index"]
+        if turn_index in chapter_turns and turn_index not in chapter_starts:
+            chapter_starts[turn_index] = elapsed
+        selected = assignments[unit["speaker"]]
+        style = unit["style"]
+        audio = synthesize(
+            req.engine,
+            unit["text"],
+            voice=selected["voice"],
+            reference_path=selected["reference_path"],
+            reference_text=selected["reference_text"],
+            speed=style_params(style)["pace"] if req.engine == "kokoro" else 1.0,
+            exaggeration=(
+                max(0.0, min(1.0, 0.5 * style_cfg_multiplier(style)))
+                if req.engine == "chatterbox" else 0.5
+            ),
+            language=req.language or "en",
+            style=style,
+        )
+        audios.append(audio)
+        pause = unit.get("pause_after") or 0.0
+        gap_ms = int(round(pause * 1000)) if pause else 250
+        gaps_ms.append(gap_ms)
+        elapsed += wav_duration_seconds(audio) + gap_ms / 1000
+
+    return (
+        stitch_wav_bytes(audios, silence_ms=250, gaps_ms=gaps_ms),
+        len(audios),
+        round(time.time() - t0, 2),
+        chapter_starts,
+    )
+
 
 def _do_tts_longform_sync(
     req: TTSLongformRequest,
@@ -1768,14 +2061,21 @@ def _do_tts_longform_sync(
     for warning in voice_warnings:
         log_audio_event("warning", "LONGFORM_VOICE_WARNING", extra={"detail": warning}, req_id=req_id)
 
+    req.voice_names = [assignment[name] for name in speakers if name in assignment]
     voice_samples = voice_paths_by_id(assignment, voices)
     if not voice_samples:
         raise HTTPException(
             status_code=500, detail="no voice files found in the longform voices directory"
         )
 
-    grouped = group_units(build_units(turns, default_style=req.style or DEFAULT_STYLE))
-    segments = plan_generation(grouped, max_words)
+    chapter_turns = {
+        chapter["start_turn"] for chapter in (req.extras or {}).get("chapters", [])
+    }
+    grouped = group_units(
+        build_units(turns, default_style=req.style or DEFAULT_STYLE),
+        break_before_turns=chapter_turns,
+    )
+    segments = plan_generation(grouped, max_words, break_before_turns=chapter_turns)
     chunks_used = len(segments)
     total_words = sum(len(unit["text"].split()) for unit in grouped)
 
@@ -1791,7 +2091,12 @@ def _do_tts_longform_sync(
     try:
         segment_audios: List[bytes] = []
         gaps_ms: List[int] = []
+        chapter_starts: Dict[int, float] = {}
+        elapsed = 0.0
         for idx, segment in enumerate(segments):
+            turn_index = segment[0]["turn_index"]
+            if turn_index in chapter_turns and turn_index not in chapter_starts:
+                chapter_starts[turn_index] = elapsed
             segment_words = sum(len(unit["text"].split()) for unit in segment)
             style = segment[0]["style"]
             cfg = base_cfg * style_cfg_multiplier(style)
@@ -1807,11 +2112,13 @@ def _do_tts_longform_sync(
                             extra={"segment_time_sec": round(time.time() - segment_t0, 2),
                                    "segment_bytes": len(segment_bytes)}, req_id=req_id)
             segment_audios.append(segment_bytes)
-            gaps_ms.append(int(round(segment_gap_seconds(segment) * 1000)))
+            gap_ms = int(round(segment_gap_seconds(segment) * 1000))
+            gaps_ms.append(gap_ms)
+            elapsed += wav_duration_seconds(segment_bytes) + gap_ms / 1000
 
         # Stitch every segment together, honouring the pause after each one
         stitch_t0 = time.time()
-        audio_bytes = _stitch_wav_bytes(segment_audios, silence_ms=400, gaps_ms=gaps_ms)
+        audio_bytes = stitch_wav_bytes(segment_audios, silence_ms=400, gaps_ms=gaps_ms)
         log_audio_event("info", "LONGFORM_STITCH_COMPLETE",
                         extra={"stitch_time_sec": round(time.time() - stitch_t0, 2),
                                "total_bytes": len(audio_bytes)}, req_id=req_id)
@@ -1820,7 +2127,7 @@ def _do_tts_longform_sync(
         _mps_cleanup()
     
     total_time = round(time.time() - t0, 2)
-    return audio_bytes, chunks_used, total_time
+    return audio_bytes, chunks_used, total_time, chapter_starts
 
 
 @app.post("/tts/longform")
@@ -1845,18 +2152,26 @@ async def tts_longform(req: TTSLongformRequest):
         # This prevents "socket hang up" errors on the frontend.
         # We use our custom executor (max 2 workers) to limit concurrent TTS jobs.
         loop = asyncio.get_event_loop()
-        audio_bytes, chunks_used, gen_time = await loop.run_in_executor(
-            _tts_executor, _do_tts_longform_sync, req, turns, max_words, req_id
+        handler = _do_tts_longform_sync if req.engine == "vibevoice" else _do_tts_engine_script_sync
+        audio_bytes, chunks_used, gen_time, chapter_starts = await loop.run_in_executor(
+            _tts_executor, handler, req, turns, max_words, req_id
         )
         
         meta = {
             "word_count": total_words,
+            "engine": req.engine,
             "voice_names": req.voice_names or [],
             "format": req.format or "interview",
             "language": req.language,
+            "duration_minutes": req.duration_minutes,
             "chunks": chunks_used,
             "device": DEVICE,
         }
+        if req.extras:
+            meta["extras"] = (
+                with_chapter_timing(req.extras, chapter_starts)
+                if req.extras.get("chapters") else req.extras
+            )
         if req.topic:
             meta["topic"] = req.topic
         audio_bytes = _finalize_audio(audio_bytes, meta)
@@ -1879,6 +2194,8 @@ async def tts_longform(req: TTSLongformRequest):
         return StreamingResponse(io.BytesIO(audio_bytes), media_type="audio/wav", headers=headers)
     except HTTPException:
         raise
+    except EngineUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         total_time = round(time.time() - t0, 2)
         log_audio_event("error", "LONGFORM_REQUEST_FAILED",
@@ -1906,97 +2223,36 @@ def chunk_text_by_sentences(text: str, max_chars: int = 2400) -> List[str]:
     return chunks
 
 
-def _do_tts_local_fallback_sync(text: str, speaker: str, save_to_disk: bool = False, topic: Optional[str] = None) -> tuple:
-    """Synchronous helper for Sarvam fallback. Returns (audio_bytes, saved_filename)."""
-    processor, model = load_longform_tts()
-    
-    full_script = f"Speaker 1: {text}".replace("’", "'")
-    
-    voice_samples = []
-    voice_path = None
-    for f in os.listdir(LONGFORM_VOICES_DIR):
-        if f.lower().endswith('.wav') and speaker.lower() in f.lower():
-            voice_path = os.path.join(LONGFORM_VOICES_DIR, f)
-            break
-    if not voice_path:
-        wavs = [f for f in os.listdir(LONGFORM_VOICES_DIR) if f.lower().endswith('.wav')]
-        if not wavs:
-            raise HTTPException(status_code=500, detail="No voice presets found")
-        voice_path = os.path.join(LONGFORM_VOICES_DIR, wavs[0])
-    voice_samples.append(voice_path)
-    
-    inputs = processor(
-        text=[full_script],
-        voice_samples=[voice_samples],
-        padding=True,
-        return_tensors="pt",
-        return_attention_mask=True,
+async def _sarvam_fallback(req: SarvamTTSRequest):
+    """Use the full VibeVoice longform pipeline for English; never fake Indic output."""
+    if not req.target_language_code.lower().startswith("en"):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Sarvam is unavailable and VibeVoice cannot render the requested "
+                "Indian language. Configure/retry Sarvam; no downgraded file was saved."
+            ),
+        )
+    turns = normalize_turns(req.script) if req.script is not None else []
+    if not turns:
+        turns = [{"speaker": req.speaker, "content": req.text}]
+    fallback_req = TTSLongformRequest(
+        script=turns,
+        voice_names=req.voice_names or [req.speaker],
+        engine="vibevoice",
+        save_to_disk=req.save_to_disk,
+        topic=req.topic,
+        format=req.format,
+        language="en",
+        duration_minutes=req.duration_minutes,
+        style=req.style,
+        extras=req.extras,
     )
-    
-    target_device = DEVICE if DEVICE != "cpu" else "cpu"
-    for k, v in inputs.items():
-        if torch.is_tensor(v):
-            inputs[k] = v.to(target_device)
-    
-    estimated_tokens = min(int(len(full_script) * 2.5) + 512, 8192)
-    try:
-        with _tts_generation_lock, torch.inference_mode():
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=estimated_tokens,
-                cfg_scale=1.5,
-                tokenizer=processor.tokenizer,
-                generation_config={'do_sample': False},
-                verbose=False,
-            )
-        
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                processor.save_audio(outputs.speech_outputs[0], output_path=tmp.name)
-                tmp_path = tmp.name
-            with open(tmp_path, "rb") as f:
-                audio_bytes = f.read()
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-    finally:
-        try:
-            del inputs
-        except NameError:
-            pass
-        try:
-            del outputs
-        except NameError:
-            pass
-        _mps_cleanup()
-    
-    saved_filename = None
-    if save_to_disk:
-        meta = {"word_count": len(text.split()), "speaker": speaker, "provider": "vibevoice_fallback", "format": "monologue", "language": "en"}
-        if topic:
-            meta["topic"] = topic
-        saved_filename = save_to_outputs(audio_bytes, prefix="podcast_fallback", metadata=meta)
-    
-    return audio_bytes, saved_filename
+    response = await tts_longform(fallback_req)
+    response.headers["X-TTS-Provider"] = "vibevoice-local-fallback"
+    response.headers["X-Language-Fallback"] = "true"
+    return response
 
-
-async def _tts_local_fallback(text: str, speaker: str, save_to_disk: bool = False, topic: Optional[str] = None):
-    """Fallback to local VibeVoice longform TTS when Sarvam is unavailable.
-    Runs in thread pool to avoid blocking the event loop."""
-    loop = asyncio.get_event_loop()
-    audio_bytes, saved_filename = await loop.run_in_executor(
-        _tts_executor, _do_tts_local_fallback_sync, text, speaker, save_to_disk, topic
-    )
-    # Tell the client this is NOT Sarvam output: an Indian-language request that fell
-    # back to a local English voice must never look like a successful Indic render.
-    headers = {
-        "X-TTS-Provider": "vibevoice-local-fallback",
-        "X-Language-Fallback": "true",
-    }
-    if saved_filename:
-        headers["X-Saved-Filename"] = saved_filename
-    return StreamingResponse(io.BytesIO(audio_bytes), media_type="audio/wav", headers=headers)
 
 @app.post("/tts/sarvam")
 async def tts_sarvam(req: SarvamTTSRequest):
@@ -2007,7 +2263,7 @@ async def tts_sarvam(req: SarvamTTSRequest):
     if not api_key:
         print("[tts/sarvam] SARVAM_API_KEY missing — falling back to local VibeVoice TTS.")
         try:
-            return await _tts_local_fallback(req.text, req.speaker, save_to_disk=req.save_to_disk, topic=req.topic)
+            return await _sarvam_fallback(req)
         except HTTPException:
             raise
         except Exception as e:
@@ -2016,20 +2272,53 @@ async def tts_sarvam(req: SarvamTTSRequest):
     
     fallback_triggered = False
     try:
-        # Delivery directives are honoured here too: the markers are removed from the
-        # text, and the silence they ask for is inserted between the rendered parts.
-        units = split_units(req.text)
+        turns = normalize_turns(req.script) if req.script is not None else []
+        if req.script is not None and not turns:
+            raise HTTPException(status_code=400, detail="script is empty")
+        speakers = speaker_order(turns)
+        voice_map: Dict[str, str] = {}
+        for index, speaker in enumerate(speakers):
+            requested_voice = (
+                req.voice_names[index]
+                if req.voice_names and index < len(req.voice_names) else ""
+            )
+            voice_map[speaker] = (
+                requested_voice
+                or (req.speaker if index == 0 else "")
+                or SARVAM_DEFAULT_VOICES[index % len(SARVAM_DEFAULT_VOICES)]
+            )
+
+        # Delivery directives are honoured per turn; each unit retains its source
+        # speaker and turn index for voice selection and measured chapter starts.
+        units: List[Dict[str, Any]] = []
+        if turns:
+            for turn_index, turn in enumerate(turns):
+                for unit in split_units(turn["content"], default_style=req.style or DEFAULT_STYLE):
+                    units.append({
+                        **unit,
+                        "speaker": turn["speaker"],
+                        "turn_index": turn_index,
+                    })
+        else:
+            units = [
+                {**unit, "speaker": req.speaker, "turn_index": 0}
+                for unit in split_units(req.text, default_style=req.style or DEFAULT_STYLE)
+            ]
         if not units:
             raise HTTPException(status_code=400, detail="text is empty")
 
         chunks: List[str] = []
         gaps_ms: List[int] = []
         chunk_styles: List[str] = []
+        chunk_speakers: List[str] = []
+        chunk_turns: List[int] = []
         for unit in units:
             pieces = chunk_text_by_sentences(unit["text"], max_chars=2400) or [unit["text"]]
             for index, piece in enumerate(pieces):
                 chunks.append(piece)
                 chunk_styles.append(unit["style"])
+                chunk_speakers.append(unit["speaker"])
+                chunk_turns.append(unit["turn_index"])
                 last_piece = index == len(pieces) - 1
                 gaps_ms.append(
                     int(round((unit.get("pause_after") or 0.0) * 1000)) if last_piece else 300
@@ -2040,13 +2329,22 @@ async def tts_sarvam(req: SarvamTTSRequest):
         language_code = SARVAM_LANGUAGE_CODES.get(req.target_language_code, req.target_language_code)
 
         segments = []
+        wav_segments: List[bytes] = []
+        chapter_turns = {
+            chapter["start_turn"] for chapter in (req.extras or {}).get("chapters", [])
+        }
+        chapter_starts: Dict[int, float] = {}
+        elapsed = 0.0
         for idx, chunk in enumerate(chunks):
+            turn_index = chunk_turns[idx]
+            if turn_index in chapter_turns and turn_index not in chapter_starts:
+                chapter_starts[turn_index] = elapsed
             style = chunk_styles[idx]
             params = style_params(style)
             payload = {
                 "text": chunk,
                 "target_language_code": language_code,
-                "speaker": req.speaker,
+                "speaker": voice_map.get(chunk_speakers[idx], req.speaker),
                 "pace": req.pace if style == DEFAULT_STYLE else params["pace"],
                 "model": req.model,
                 "output_audio_codec": req.output_audio_codec,
@@ -2076,48 +2374,84 @@ async def tts_sarvam(req: SarvamTTSRequest):
                 # Log the exact error and fall back to local TTS instead of hard-failing
                 fallback_triggered = True
                 print(f"[tts/sarvam] Sarvam API error: {resp.status_code} — {resp.text[:200]}. Falling back to local VibeVoice TTS.")
-                return await _tts_local_fallback(req.text, req.speaker, save_to_disk=req.save_to_disk, topic=req.topic)
+                return await _sarvam_fallback(req)
 
             data = resp.json()
             audio_bytes = base64.b64decode(data["audios"][0])
 
-            # Load into pydub AudioSegment for concatenation
+            if req.output_audio_codec == "wav":
+                wav_segments.append(audio_bytes)
+                elapsed += wav_duration_seconds(audio_bytes) + gaps_ms[idx] / 1000
+                continue
+
             fmt = req.output_audio_codec.replace("mulaw", "wav").replace("alaw", "wav")
             seg = AudioSegment.from_file(io.BytesIO(audio_bytes), format=fmt)
             segments.append(seg)
+            elapsed += len(seg) / 1000 + gaps_ms[idx] / 1000
 
-        # Concatenate the parts, honouring the pause after each one
-        final_audio = segments[0]
-        for index, seg in enumerate(segments[1:]):
-            gap = gaps_ms[index] if index < len(gaps_ms) else 300
-            if gap > 0:
-                final_audio = final_audio + AudioSegment.silent(duration=gap) + seg
-            else:
-                final_audio = final_audio + seg
-        
-        # Normalise the lossless master once, then encode the requested codec from it,
-        # so the returned audio and the saved episode are the same audio.
-        wav_buf = io.BytesIO()
-        final_audio.export(wav_buf, format="wav")
-        wav_buf.seek(0)
+        if req.output_audio_codec == "wav":
+            master_wav = stitch_wav_bytes(wav_segments, silence_ms=0, gaps_ms=gaps_ms)
+        else:
+            # Compressed inputs need decoding before they can become the lossless master.
+            final_audio = segments[0]
+            for index, seg in enumerate(segments[1:]):
+                gap = gaps_ms[index] if index < len(gaps_ms) else 300
+                if gap > 0:
+                    final_audio = final_audio + AudioSegment.silent(duration=gap) + seg
+                else:
+                    final_audio = final_audio + seg
 
-        meta = {"word_count": len(req.text.split()), "speaker": req.speaker, "language": req.language or req.target_language_code, "provider": "sarvam", "chunks": len(chunks), "format": req.format or "monologue"}
+            tmp_path = None
+            try:
+                tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+                tmp_path = tmp.name
+                tmp.close()
+                final_audio.export(tmp_path, format="wav")
+                with open(tmp_path, "rb") as handle:
+                    master_wav = handle.read()
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+
+        meta = {
+            "word_count": len(req.text.split()),
+            "speaker": req.speaker,
+            "voice_names": [voice_map[speaker] for speaker in speakers] if turns else [req.speaker],
+            "language": req.language or req.target_language_code,
+            "duration_minutes": req.duration_minutes,
+            "provider": "sarvam",
+            "engine": "sarvam",
+            "chunks": len(chunks),
+            "format": req.format or "monologue",
+        }
+        if req.extras:
+            meta["extras"] = (
+                with_chapter_timing(req.extras, chapter_starts)
+                if req.extras.get("chapters") else req.extras
+            )
         if req.topic:
             meta["topic"] = req.topic
-        wav_bytes = _finalize_audio(wav_buf.getvalue(), meta)
+        wav_bytes = _finalize_audio(master_wav, meta)
 
-        final_audio = AudioSegment.from_file(io.BytesIO(wav_bytes), format="wav")
-        buf = io.BytesIO()
-        export_format = "wav" if req.output_audio_codec in ("pcm", "mulaw", "alaw") else req.output_audio_codec
-        final_audio.export(buf, format=export_format)
-        buf.seek(0)
-        audio_bytes = buf.read()
+        if req.output_audio_codec == "wav":
+            audio_bytes = wav_bytes
+        else:
+            final_audio = AudioSegment.from_file(io.BytesIO(wav_bytes), format="wav")
+            buf = io.BytesIO()
+            export_format = "wav" if req.output_audio_codec in ("pcm", "mulaw", "alaw") else req.output_audio_codec
+            final_audio.export(buf, format=export_format)
+            audio_bytes = buf.getvalue()
 
         # The episode library stores WAV, whatever codec the caller asked for, so the
         # history list and the RSS feed never point at a file with the wrong extension.
         saved_filename = None
         if req.save_to_disk:
             saved_filename = save_to_outputs(wav_bytes, prefix="podcast_sarvam", metadata=meta)
+            _save_transcript_sidecar(
+                saved_filename,
+                turns or [{"speaker": req.speaker, "content": req.text}],
+                meta,
+            )
         
         codec_to_mime = {
             "wav": "audio/wav", "mp3": "audio/mpeg", "aac": "audio/aac",
@@ -2125,7 +2459,7 @@ async def tts_sarvam(req: SarvamTTSRequest):
             "mulaw": "audio/mulaw", "alaw": "audio/alaw"
         }
         mime = codec_to_mime.get(req.output_audio_codec, "audio/wav")
-        headers = {"X-TTS-Provider": "sarvam"}
+        headers = {"X-TTS-Provider": "sarvam", "X-Chunks-Used": str(len(chunks))}
         if saved_filename:
             headers["X-Saved-Filename"] = saved_filename
         return StreamingResponse(io.BytesIO(audio_bytes), media_type=mime, headers=headers)
@@ -2140,7 +2474,9 @@ async def tts_sarvam(req: SarvamTTSRequest):
         print(f"[tts/sarvam] Exception calling Sarvam: {e}. Falling back to local VibeVoice TTS.")
         traceback.print_exc()
         try:
-            return await _tts_local_fallback(req.text, req.speaker, save_to_disk=req.save_to_disk, topic=req.topic)
+            return await _sarvam_fallback(req)
+        except HTTPException:
+            raise
         except Exception as fallback_e:
             traceback.print_exc()
             raise HTTPException(status_code=500, detail=str(fallback_e))
@@ -2291,7 +2627,32 @@ Now write the complete script."""
         
         # Auto-expand if significantly under target (common for Indic LLM outputs)
         script, word_count = expand_script_if_needed(script, word_count)
-        
+        if req.format == "monologue":
+            combined = "\n\n".join(turn["content"] for turn in script)
+            script = split_monologue_turns(combined, speakers[0])
+            word_count = sum(len(turn["content"].split()) for turn in script)
+
+        extras = None
+        extras_error = None
+        if req.include_extras:
+            chapter_count = (
+                1 if req.format == "monologue"
+                else chapters or {2: 2, 5: 3, 10: 3}.get(req.duration_minutes, 4)
+            )
+            try:
+                extras = generate_content_extras(
+                    req.topic,
+                    script,
+                    req.duration_minutes,
+                    lang_name,
+                    chapter_count,
+                    llm_chat,
+                )
+            except Exception as e:
+                # The completed script remains useful when an optional metadata pass fails.
+                logger.error("Content extras generation failed: %s", e)
+                extras_error = f"Script ready, but show notes/chapters/clips failed: {e}"
+
         gen_time = round(time.time() - start_time, 2)
         
         return {
@@ -2304,11 +2665,34 @@ Now write the complete script."""
             # script instead of silently accepting it.
             "target_words": target_words,
             "under_target": word_count < target_words * 0.6,
+            "extras": extras,
+            "extras_error": extras_error,
             "generation_time_seconds": gen_time,
         }
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/podcast/extras")
+def podcast_content_extras(req: ContentExtrasRequest):
+    """Refresh metadata for an existing or edited script without rewriting it."""
+    try:
+        chapter_count = (
+            1 if req.format == "monologue"
+            else DURATION_CONFIG.get(req.duration_minutes, DURATION_CONFIG[2])["chapters"]
+                or {2: 2, 5: 3, 10: 3}.get(req.duration_minutes, 4)
+        )
+        extras = generate_content_extras(
+            req.topic,
+            req.script,
+            req.duration_minutes,
+            LANGUAGE_MAP.get(req.language, req.language),
+            chapter_count,
+            llm_chat,
+        )
+        return {"extras": extras}
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 @app.get("/podcast/history")
 async def podcast_history(limit: int = Query(default=20, ge=1, le=100)):
@@ -2324,6 +2708,7 @@ async def podcast_history(limit: int = Query(default=20, ge=1, le=100)):
                     "filename": f,
                     "size_bytes": stat.st_size,
                     "created_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    "has_transcript": os.path.exists(os.path.splitext(path)[0] + ".transcript.json"),
                 }
                 meta_path = path.replace(".wav", ".json")
                 if os.path.exists(meta_path):
@@ -2344,6 +2729,8 @@ async def podcast_history(limit: int = Query(default=20, ge=1, le=100)):
                             entry["provider"] = metadata["provider"]
                         if metadata.get("engine"):
                             entry["engine"] = metadata["engine"]
+                        if metadata.get("extras"):
+                            entry["extras"] = metadata["extras"]
                         if metadata.get("loudness"):
                             entry["loudness"] = metadata["loudness"]
                         if metadata.get("duration_seconds"):
@@ -2388,7 +2775,7 @@ async def podcast_rename(payload: RenameRequest):
         # "wav" cannot mangle the metadata filename.
         old_base = os.path.splitext(old_path)[0]
         new_base = os.path.splitext(new_path)[0]
-        for suffix in (".json", ".transcript.json"):
+        for suffix in (".json", ".transcript.json", ".chapters.json"):
             old_sidecar = old_base + suffix
             if os.path.exists(old_sidecar):
                 os.rename(old_sidecar, new_base + suffix)
@@ -2424,7 +2811,7 @@ async def podcast_delete(filename: str = Query(...)):
         # Remove the metadata and the transcript sidecar as well, otherwise the feed
         # keeps advertising files that no longer exist.
         removed_sidecars = []
-        for suffix in (".json", ".transcript.json"):
+        for suffix in (".json", ".transcript.json", ".chapters.json"):
             sidecar = base_path + suffix
             if os.path.exists(sidecar):
                 os.unlink(sidecar)

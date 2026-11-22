@@ -7,9 +7,9 @@
 ## Requirements
 
 - **macOS** with Apple Silicon (M1/M2/M3/M4) — for local VibeVoice TTS
-- **Python 3.10+**
+- **Python 3.12 recommended** (required for the documented MLX worker environment)
 - **Node.js 18+** — if you want the React frontend
-- **~10–15 GB free disk space** — for VibeVoice model downloads
+- **Disk space for the models you select** — Kokoro ~300 MB, each Qwen 8-bit model ~2 GB, VibeVoice ~7.4 GB without ASR
 - **API keys** for script generation (see [API_KEYS.md](./API_KEYS.md))
 
 ### ⚠️ Hardware Requirements (Critical)
@@ -47,17 +47,20 @@ VibeVoice TTS models are **not bundled in the repo**. They download automaticall
 
 ### Model Preloading at Startup
 
-By default, the backend **preloads the Longform 1.5B model in a background thread** at startup (`LONGFORM_PRELOAD_AT_STARTUP=true`). This prevents HTTP request timeouts during your first multi-speaker audio generation. The model downloads from HuggingFace if not already cached.
+Models load lazily on first use. The backend does not download VibeVoice merely because it
+started. Set `LONGFORM_PRELOAD_AT_STARTUP=true` only when you intentionally want to preload
+the 1.5B model in a background thread.
 
 | Environment Variable | Default | Effect |
 |---|---|---|
-| `LONGFORM_PRELOAD_AT_STARTUP` | `true` | Preload 5.4GB longform TTS on startup |
+| `LONGFORM_PRELOAD_AT_STARTUP` | `false` | Preload 5.4GB longform TTS on startup |
 | `ASR_PRELOAD_AT_STARTUP` | `false` | Preload 14GB ASR model on startup (large, opt-in) |
 | `LONGFORM_DDPM_STEPS` | `5` | Diffusion steps for longform (lower = faster, 3–10 range) |
 | `MAX_LONGFORM_WORDS_MPS` | `350` | Chunk size for Apple Silicon (lower = less RAM) |
 | `MAX_LONGFORM_WORDS_CPU` | `300` | Chunk size for CPU-only machines |
 
-> ⚠️ **First startup after install:** If models are not cached, the backend will appear ready immediately, but the first `/health` check will show `"loaded_models": []`. Wait 5–15 minutes for the download to complete before generating multi-speaker audio. Realtime (single-speaker) audio works as soon as the 0.5B model loads (~2 min).
+> Use Kokoro or Qwen3-TTS in Voice Lab when you want a small/fast test without downloading
+> VibeVoice. The engine catalogue reports whether each runtime is actually available.
 
 ---
 
@@ -74,7 +77,7 @@ cd podcast-brain-pro
 
 ```bash
 cd voice-service
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 ```
 
@@ -96,7 +99,19 @@ Still inside the activated virtual environment:
 
 ```bash
 pip install -r requirements.txt
+pip install kokoro  # optional fast CPU engine; install espeak-ng separately
 ```
+
+For Qwen3-TTS and Chatterbox on Apple Silicon, keep current MLX Audio in a separate
+Python 3.12 environment because its dependencies conflict with VibeVoice:
+
+```bash
+python3.12 -m venv .venv-mlx
+.venv-mlx/bin/pip install -r requirements-mlx.txt
+```
+
+The application starts `.venv-mlx` automatically when one of those engines is selected.
+Qwen cloning requires the exact reference transcript; all cloning requires consent.
 
 ### 5. Configure API keys
 
@@ -128,7 +143,7 @@ file.
 
 You can also configure keys later via the web UI (Settings → API Keys).
 
-### 5. Run the FastAPI backend
+### 6. Run the FastAPI backend
 
 ```bash
 uvicorn main:app --host 127.0.0.1 --port 8000
@@ -142,7 +157,7 @@ The backend will be available at **http://localhost:8000**.
 >
 > 🎙️ **Publishing a feed?** Set `PUBLIC_BASE_URL` to a public address before submitting `/feed/podcast.rss` to a podcast host, and set `PODCAST_IMAGE_URL` and `PODCAST_EMAIL` — Apple requires channel artwork and an owner.
 
-### 6. Run the React frontend (optional but recommended)
+### 7. Run the React frontend (optional but recommended)
 
 In a new terminal:
 
@@ -190,7 +205,7 @@ export HF_HOME=/path/to/larger/disk
 ```
 
 ### Model not ready / "Internal Server Error" on first audio generation
-This happens when you click **Generate Audio** before the model has finished downloading. The backend preloads models in the background at startup.
+This happens when you click **Generate Audio** before the selected model has finished downloading. Models load lazily on first use unless you explicitly enable preloading.
 
 **Check model status:**
 ```bash

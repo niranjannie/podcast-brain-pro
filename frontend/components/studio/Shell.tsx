@@ -4,7 +4,7 @@ import { Studio } from "@/lib/useStudio";
 import { ViewId } from "@/lib/studio-types";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { AudioLines, FolderOpen, Mic, Settings, Sparkles, HelpCircle, FlaskConical } from "lucide-react";
+import { AudioLines, FolderOpen, Mic, Settings, Sparkles, HelpCircle, FlaskConical, ExternalLink } from "lucide-react";
 
 const NAV: { id: ViewId; label: string; icon: typeof Mic; hint: string }[] = [
   { id: "create", label: "Create", icon: Sparkles, hint: "Topic to episode" },
@@ -112,6 +112,12 @@ export function Shell({
               <HelpCircle className="w-3.5 h-3.5" /> Help
             </button>
           </div>
+          <a
+            href="/landing"
+            className="flex items-center justify-center gap-1.5 rounded-lg border border-border px-2 py-1.5 text-[11px] text-muted hover:text-foreground"
+          >
+            <ExternalLink className="w-3.5 h-3.5" /> Marketing page
+          </a>
         </div>
       </aside>
 

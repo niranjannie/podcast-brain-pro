@@ -1,5 +1,9 @@
 # Podcast Brain Pro — Product Audit (November 2026)
 
+> **Status update:** this is the original audit. Its open items were subsequently addressed;
+> including the large-component split, real response stats, backend health, accessible modal,
+> library search/load-more, stem rename, multi-host Indic rendering, and smaller landing media.
+> See `docs/HANDOFF.md` for the final implementation and verification record.
 Date: 2026-11-21
 Scope: `voice-service/` (FastAPI backend), `frontend/` (Next.js studio + landing),
 `vibevoice-src/` (vendored Microsoft VibeVoice), provider chain, and the external

@@ -5,9 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState, ErrorBanner, TextInput } from "./ui";
 import { formatBytes, formatDate } from "@/lib/utils";
-import { Download, FolderOpen, Pencil, Play, RotateCcw, Rss, Search, Trash2 } from "lucide-react";
+import { Download, FolderOpen, Pencil, Play, RefreshCcw, RotateCcw, Rss, Search, Trash2 } from "lucide-react";
 
-export function LibraryView({ studio }: { studio: Studio }) {
+export function LibraryView({ studio, onEdit }: { studio: Studio; onEdit: () => void }) {
   return (
     <div className="space-y-4">
       <div className="panel p-4 flex flex-wrap items-center gap-3">
@@ -30,6 +30,13 @@ export function LibraryView({ studio }: { studio: Studio }) {
           </a>
         </Button>
       </div>
+
+      {studio.audioUrl && (
+        <div className="panel p-4">
+          <p className="text-xs font-medium mb-2 break-all">{studio.audioFilename}</p>
+          <audio key={studio.audioUrl} controls className="w-full" src={studio.audioUrl} />
+        </div>
+      )}
 
       {studio.historyError && (
         <ErrorBanner message={studio.historyError} onDismiss={() => studio.setHistoryError(null)} />
@@ -108,6 +115,18 @@ export function LibraryView({ studio }: { studio: Studio }) {
                   >
                     <Download className="w-4 h-4" />
                   </a>
+                  {item.has_transcript && (
+                    <button
+                      onClick={async () => {
+                        if (await studio.loadEpisodeForRerender(item)) onEdit();
+                      }}
+                      className="p-2 rounded-lg text-muted hover:text-accent"
+                      aria-label={`Re-render ${item.filename}`}
+                      title="Load script and re-render without generating a new script"
+                    >
+                      <RefreshCcw className="w-4 h-4" />
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       studio.setRenamingFile(item.filename);

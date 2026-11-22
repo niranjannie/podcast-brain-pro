@@ -99,6 +99,7 @@ they change pace and temperature. A style marker applies until the next marker.
 {
   "longform": [{ "id": "en-Carter_man", "language": "en", "gender": "man", "name": "Carter" }],
   "streaming": [{ "id": "en-Carter_man", "language": "en", "gender": "man", "name": "Carter" }],
+  "cloned": [],
   "styles": ["calm", "excited", "narrative", "neutral", "serious", "warm"]
 }
 ```
@@ -124,6 +125,9 @@ POST /tts/longform
 |---|---|---|
 | `script` | list of dicts | the turn list, `{"speaker": ..., "content": ...}` |
 | `voice_names` | string[] | one voice per speaker, in the same order as the speakers |
+| `engine` | string | `vibevoice` (default), `kokoro`, `qwen3-tts`, or `chatterbox` |
+| `duration_minutes` | int | original episode length, retained for rerendering |
+| `extras` | object | optional validated show notes, chapters, captions, and clip selections |
 | `cfg_scale` | float | 1.3 default for longform, 1.5 for realtime |
 | `save_to_disk` | bool | default true |
 | `topic` | string | used for the output filename |
@@ -138,6 +142,10 @@ Single-turn synthesis uses `POST /tts/realtime` with `{ "text", "speaker_name", 
 |---|---|
 | `GET /health` | liveness |
 | `GET /models/status` | which TTS/ASR models are loaded |
+| `GET /engines` | install/runtime health and preset voices for optional engines |
+| `POST /podcast/extras` | refresh show notes, chapters, captions, and clip selections without rewriting |
+| `POST /tts/engine` | single-voice preview with Kokoro, Qwen3-TTS, or a consented clone |
+| `POST /tts/clone` | consent-gated cloning; Qwen requires `reference_text` |
 | `GET /config`, `POST /config` | read and write provider keys |
 | `GET /feed/podcast.rss` | RSS feed for generated episodes |
 | `POST /asr/transcribe` | transcribe an audio file |

@@ -1,8 +1,8 @@
 ---
 name: podcast-brain-pro
-description: Turn any topic into a finished podcast episode - a research-grounded script in English or 10 Indian languages, in monologue, two-host interview, or three-person panel format, plus optional local VibeVoice TTS audio and an RSS feed.
+description: Turn any topic into a finished podcast episode - a research-grounded script in English or 10 Indian languages, monologue/interview/panel formats, show notes, chapters, social clips, and optional local/cloud audio with consent-gated voice cloning.
 trigger: podcast, podcast script, episode script, make a podcast, turn this topic into a podcast, audio episode, show notes, podcast brain pro
-version: 1.0.0
+version: 1.1.0
 compatible_agents: claude, claude-code, codex, cursor, chatgpt, openclaw, gemini-cli, copilot, cline, kiro, grok
 ---
 
@@ -53,7 +53,8 @@ Malayalam, Punjabi, Odia.
 | 30 | 4500 |
 
 **Monologue**
-- One speaker (`Host`) speaking throughout.
+- One speaker (`Host`) speaking throughout. For a multi-paragraph episode, use multiple Host
+  turns of roughly 50-70 words so chapters and social clips can reference a short passage.
 - Plain spoken text only: no markdown, no bullet points, no headings, no sound-effect cues
   or stage directions - they break TTS.
 - Open with the topic and why it matters now, develop it, present more than one side
@@ -128,33 +129,46 @@ and state that you did.
 
 ## 6. Audio (only if the user wants audio)
 
-**Local, private path - VibeVoice on the user's own machine**
-Requires macOS Apple Silicon or a CUDA GPU, Python 3.10+, and roughly 15 GB of disk for
-the models. Setup and the exact API calls are in `reference/local-tts.md`.
+**Local application path**
+The user's own Podcast Brain Pro service supports VibeVoice, Kokoro 82M, Qwen3-TTS,
+Chatterbox MLX, and Sarvam. Setup and exact requests are in `reference/local-tts.md`.
+Do not claim an engine works until `GET /engines` reports it installed and healthy.
 
-Give every host a different voice. The local service exposes the available presets at
-`GET /voices` and accepts one voice id per speaker in `voice_names`, in the order the
-speakers first appear in the script.
+- Use `GET /voices` for presets and consented cloned voices.
+- Send the generated `speaker` turns directly to `/tts/longform`; no `role` conversion is
+  needed. Select `engine` and one `voice_names` entry per speaker in first-appearance order.
+- Kokoro is the fast 82M CPU preview path. Qwen3-TTS provides preset voices, natural-language
+  delivery, and cloning on Apple Silicon. Chatterbox MLX clones from reference audio.
+- Cloning requires explicit consent. Qwen also requires the exact reference transcript;
+  never bypass either requirement or invent a transcript.
+- Indian-language conversations use `/tts/sarvam` with `script` and per-speaker
+  `voice_names`; do not flatten multi-host dialogue into one narrator.
 
-**Hosted path**
-If the environment exposes a TTS tool (ElevenLabs, MiniMax, HeyGen, Sarvam, or any other),
-use it per turn, keyed by speaker name, and stitch the results. Report per-turn cost
-before a long episode so the user can stop.
+**Hosted agent-tool path**
+If the environment exposes a TTS tool (ElevenLabs, MiniMax, HeyGen, Sarvam, or another),
+use it per turn, keyed by speaker name, and stitch the results. Report per-turn cost before
+a long episode so the user can stop.
 
-Every export is normalised to podcast loudness (-16 LUFS, -1.5 dBTP) and the measurement
-is recorded next to the episode, so the file is ready for a podcast host.
+Every export is normalised to podcast loudness (-16 LUFS, -1.5 dBTP) and measured when
+ffmpeg is available. Never invent a download URL. If no audio path is available, deliver
+the script and say plainly what setup is missing.
 
-Never invent a download URL for audio. If neither path is available, deliver the script and
-say plainly that audio needs one of the two setups above.
+### Show notes, chapters, and social clips
+
+For an existing script, use `POST /podcast/extras` to generate validated show notes,
+turn-aligned chapters, five social captions, and up to three social clip selections without
+rewriting the script. After audio rendering, chapter sidecars contain measured start times.
+Render clips only from the selected original turns, not from model-invented paraphrases.
 
 ## 7. RSS and distribution
 
 If the user wants to publish, produce an RSS item alongside the audio: title, description,
-publication date, duration, and an enclosure pointing at the final file. `reference/local-tts.md`
-shows the feed format the open-source project emits.
+publication date, duration, and an enclosure pointing at the final file. The local service
+also emits transcript and measured chapter links. `reference/local-tts.md` shows the setup.
 
 ## Reference
 
 - `reference/script-format.md` - the full script contract, durations, languages, speakers,
   and the JSON schema the TTS endpoint expects.
-- `reference/local-tts.md` - running VibeVoice locally, the HTTP API, and the RSS feed.
+- `reference/local-tts.md` - local/cloud engines, consent-gated cloning, multi-host APIs,
+  content extras, and RSS distribution.

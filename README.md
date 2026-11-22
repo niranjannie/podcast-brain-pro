@@ -20,9 +20,9 @@ I spent entire weekends trying to create just one short podcast. Writing scripts
 
 By the time it was done, I was already exhausted.
 
-**What if creating a podcast was as simple as typing a sentence?**
+What if creating a podcast was as simple as typing a sentence?
 
-That's Podcast Brain Pro. An open-source AI podcast factory that runs entirely on your own machine. No studio. No cloud dependency. No subscriptions.
+That's Podcast Brain Pro. An open-source AI podcast factory with local audio engines and your choice of local or cloud script generation. No studio. No required subscription.
 
 Type a topic. Get a researched, natural script. Choose monologue, interview, or panel. Generate studio-quality audio locally. In English or 10 Indian languages.
 
@@ -37,8 +37,8 @@ Your ideas deserve to be heard.
 | 1. Enter a topic | AI researches via web search and writes a natural script | ~10–30s |
 | 2. Choose format | Monologue, two-person interview, or three-person panel | Instant |
 | 3. Pick language | English or 10 Indian languages | Instant |
-| 4. Generate audio | Local VibeVoice TTS synthesizes human-sounding speech | 30s–15min |
-| 5. Export | WAV + RSS feed + JSON metadata | Instant |
+| 4. Generate audio | Choose VibeVoice, Kokoro, Qwen3-TTS, Chatterbox, or Sarvam | Seconds–minutes by engine |
+| 5. Export | WAV + transcript + show notes + chapters + RSS + JSON metadata | Instant after render |
 
 **Languages:** English, Hindi, Kannada, Tamil, Telugu, Marathi, Bengali, Gujarati, Malayalam, Punjabi, Odia
 
@@ -48,7 +48,7 @@ Your ideas deserve to be heard.
 
 ## 🚀 Quick Start
 
-> **Prerequisites:** macOS Apple Silicon (M1–M4) or Linux/Windows + NVIDIA GPU · Python 3.10+ · Node.js 18+ · ~15 GB disk space
+> **Prerequisites:** macOS Apple Silicon for MLX engines, or Linux/Windows + NVIDIA GPU for VibeVoice · Python 3.12 recommended · Node.js 18+ · Disk space depends on selected models
 
 ```bash
 # 1. Clone
@@ -57,9 +57,14 @@ cd podcast-brain-pro
 
 # 2. Install backend
 cd voice-service
-python3 -m venv .venv && source .venv/bin/activate
+python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cd ../vibevoice-src && pip install -e . && cd ../voice-service
+pip install kokoro  # optional fast CPU previews; needs espeak-ng
+
+# Optional on Apple Silicon: Qwen3-TTS + Chatterbox in an isolated runtime
+python3.12 -m venv .venv-mlx
+.venv-mlx/bin/pip install -r requirements-mlx.txt
 
 # 3. Configure keys
 cp .env.example .env
@@ -67,7 +72,7 @@ cp .env.example .env
 
 # 4. Start backend
 source .venv/bin/activate
-uvicorn main:app --host 0.0.0.0 --port 8000
+uvicorn main:app --host 127.0.0.1 --port 8000
 
 # 5. Start frontend (new terminal)
 cd ../frontend && npm install && npm run dev
@@ -80,12 +85,15 @@ Full setup guide: [`docs/SETUP.md`](./docs/SETUP.md)
 
 ## 🎯 What Makes It Different
 
-- **Runs entirely on your machine** — Audio synthesis happens locally. No data leaves your computer.
+- **Local audio options** — VibeVoice, Kokoro, Qwen3-TTS, and Chatterbox synthesis stays on your machine. Script research/LLM providers and Sarvam only send data when you choose them; Ollama supports local scripting.
 - **10 Indian languages** — Hindi, Kannada, Tamil, Telugu, Marathi, Bengali, Gujarati, Malayalam, Punjabi, Odia. Built for multilingual creators.
 - **Natural dialogue formats** — Not just reading text aloud. Interview and panel modes generate interruptions, disagreements, and follow-ups.
 - **Directed delivery** — The scriptwriter marks pauses (`[[pause:0.8]]`) and tonal shifts (`[[style:calm]]`), and the audio engine renders them as real silence and a different voice setting.
 - **A distinct voice per host** — Each speaker is mapped to a voice file, so two hosts never end up sharing one voice.
 - **Voice Lab** — Add small local engines next to VibeVoice: Kokoro 82M (~300 MB, Apache-2.0, runs on CPU) for fast drafts, and consent-gated voice cloning with Chatterbox (MIT) or Qwen3-TTS (Apache-2.0). The catalogue tells you what is installed and whether it actually runs on your machine.
+- **Production package** — Generate show notes, takeaways, five social captions, source-grounded social clips, and measured chapter markers alongside the script.
+- **Revision loop** — Preview each cast member with the actual selected engine, then re-render a saved or edited script with a new cast/style without paying for another script generation.
+- **Multi-host everywhere** — VibeVoice, Kokoro, Qwen3-TTS, consented Chatterbox clones, and Sarvam Indian-language conversations retain per-speaker voices and pauses.
 - **Podcast ready output** — Every export is normalised to -16 LUFS, the RSS feed carries the transcript, and the episode metadata records the loudness measurement.
 - **RSS feed built-in** — Generate once, publish everywhere. No extra tools needed.
 - **Truly open source** — MIT licensed. Full code, full control, zero restrictions.
@@ -162,8 +170,10 @@ podcast-brain-pro/
 ├── voice-service/         # FastAPI backend
 │   ├── main.py            # API endpoints, TTS, LLM fallbacks
 │   ├── script_pipeline.py # Script contract, delivery directives, voice mapping
-│   ├── engines.py         # Optional local engines: Kokoro, Chatterbox, Qwen3-TTS
-│   ├── audio_pipeline.py  # Loudness normalisation and measurement
+│   ├── engines.py         # Engine registry and persistent MLX worker client
+│   ├── mlx_worker.py      # Isolated Qwen3-TTS / Chatterbox runtime
+│   ├── content_pipeline.py # Show notes, chapters, captions, source-grounded clips
+│   ├── audio_pipeline.py  # Loudness, valid PCM stitching, duration measurement
 │   ├── rss_generator.py   # RSS feed generator
 │   ├── test_script_pipeline.py
 │   ├── start.sh           # Startup script
@@ -192,13 +202,16 @@ Details: [`docs/API_KEYS.md`](./docs/API_KEYS.md)
 
 ---
 
-## ⚡ Audio Engine Speeds (M4 Mac)
+## ⚡ Engine Selection
 
-| Engine | Format | Language | Speed |
-|--------|--------|----------|-------|
-| **Realtime 0.5B** | Monologue ≤10 min | English | ~30–90s |
-| **Longform 1.5B** | Interview / Panel / >10 min | English | ~5–15 min |
-| **Sarvam Bulbul v3** | Any | Indian languages | ~30–90s |
+| Engine | Best use | Notes |
+|--------|----------|-------|
+| **Kokoro 82M** | Fast drafts and cast previews | CPU, ~300 MB, English/Hindi packs |
+| **Qwen3-TTS 1.7B** | Preset voices, delivery instructions, cloning | Apple Silicon MLX, 8-bit CustomVoice/Base models |
+| **Chatterbox v3** | Expressive consented cloning | 23 languages through the isolated MLX worker |
+| **VibeVoice Realtime 0.5B** | Existing English monologue workflow | Local PyTorch; can be slow on MPS |
+| **VibeVoice Longform 1.5B** | Existing multi-host workflow | Local PyTorch; per-speaker voice presets |
+| **Sarvam Bulbul** | Indian-language conversations | Cloud API, per-turn voices and delivery |
 
 ---
 

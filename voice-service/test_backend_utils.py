@@ -62,7 +62,7 @@ class RssGeneratorTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
 
-    def write_episode(self, name="episode one.wav", metadata=None, transcript=False):
+    def write_episode(self, name="episode one.wav", metadata=None, transcript=False, chapters=False):
         path = os.path.join(self.tmp.name, name)
         with open(path, "wb") as handle:
             handle.write(b"0" * 48000)  # one second at 24 kHz mono 16-bit
@@ -72,6 +72,9 @@ class RssGeneratorTest(unittest.TestCase):
         if transcript:
             with open(os.path.splitext(path)[0] + ".transcript.json", "w") as handle:
                 json.dump({"script": []}, handle)
+        if chapters:
+            with open(os.path.splitext(path)[0] + ".chapters.json", "w") as handle:
+                json.dump({"version": "1.2.0", "chapters": [{"startTime": 0, "title": "Opening"}]}, handle)
         return path
 
     def test_duration_comes_from_metadata(self):
@@ -112,6 +115,13 @@ class RssGeneratorTest(unittest.TestCase):
         self.write_episode(transcript=True)
         feed = generate_podcast_rss(self.tmp.name)
         self.assertIn("<podcast:transcript", feed)
+
+    def test_chapters_element_is_emitted_when_sidecar_exists(self):
+        self.write_episode(chapters=True)
+        feed = generate_podcast_rss(self.tmp.name)
+        self.assertIn('<podcast:chapters', feed)
+        self.assertIn('episode%20one.chapters.json', feed)
+        self.assertIn('type="application/json+chapters"', feed)
 
     def test_no_transcript_element_without_sidecar(self):
         self.write_episode()

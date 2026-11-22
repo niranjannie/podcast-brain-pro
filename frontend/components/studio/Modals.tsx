@@ -146,11 +146,15 @@ export function HelpModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
         <section>
           <h4 className="text-sm font-semibold text-foreground mb-2">Run the app</h4>
           <code className="block bg-surface-2 border border-border rounded-lg p-3 whitespace-pre-wrap">{`cd voice-service
-python3 -m venv .venv && source .venv/bin/activate
+python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cd ../vibevoice-src && pip install -e . && cd ../voice-service
 cp .env.example .env        # add at least one LLM key
-uvicorn main:app --host 0.0.0.0 --port 8000
+uvicorn main:app --host 127.0.0.1 --port 8000
+
+# optional Qwen3-TTS + Chatterbox on Apple Silicon
+python3.12 -m venv .venv-mlx
+.venv-mlx/bin/pip install -r requirements-mlx.txt
 
 # in a second terminal
 cd frontend && npm install && npm run dev`}</code>
@@ -162,10 +166,10 @@ cd frontend && npm install && npm run dev`}</code>
         <section>
           <h4 className="text-sm font-semibold text-foreground mb-2">Which engine renders my episode?</h4>
           <ul className="list-disc pl-5 space-y-1">
-            <li>English monologue up to 10 minutes: VibeVoice Realtime 0.5B (~2 GB).</li>
-            <li>English interview, panel or long episodes: VibeVoice Longform 1.5B (~5.4 GB).</li>
-            <li>Indian languages: Sarvam cloud, needs a key.</li>
-            <li>Voice Lab engines: Kokoro 82M (~300 MB, CPU) and Chatterbox for cloning.</li>
+            <li>Choose any installed healthy engine in the Brief; VibeVoice is no longer required for previews.</li>
+            <li>Kokoro 82M is the fast CPU path; Qwen3-TTS adds presets, delivery instructions, and cloning.</li>
+            <li>Chatterbox uses consented cloned voices. Qwen cloning also needs the exact reference transcript.</li>
+            <li>Indian languages: Sarvam cloud with per-host voices, needs a key.</li>
           </ul>
         </section>
         <section>
@@ -181,7 +185,7 @@ cd frontend && npm install && npm run dev`}</code>
           <p>
             Set <code>PUBLIC_BASE_URL</code> to a public address before submitting{" "}
             <code>/feed/podcast.rss</code> to a podcast host, otherwise the enclosure URLs point at your
-            laptop. Every export is normalised to -16 LUFS.
+            laptop. Saved episodes include transcript and measured chapter sidecars when available; RSS links both. Every export is normalised to -16 LUFS when ffmpeg is available.
           </p>
         </section>
         <section>

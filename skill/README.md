@@ -1,8 +1,9 @@
 # Podcast Brain Pro — agent skill package
 
-This folder is the packaged version of Podcast Brain Pro for AI agent platforms that
-follow the open SKILL.md standard (Claude Code, Codex CLI, Cursor, OpenClaw, Gemini
-CLI, Copilot, and anything that speaks the Agensi MCP).
+This folder packages the scriptwriting and production workflow for AI agent platforms that
+follow the open SKILL.md standard. It can drive the application's local/cloud engines,
+consent-gated cloning, show notes, chapters, social clips, and RSS APIs when the user has
+the service installed.
 
 ```
 skill/podcast-brain-pro/
@@ -10,7 +11,7 @@ skill/podcast-brain-pro/
 ├── scripts/validate_script.py    stdlib-only checker for an episode JSON
 └── reference/
     ├── script-format.md          the script contract, durations, languages, voices
-    └── local-tts.md              running VibeVoice locally, the TTS API, the RSS feed
+    └── local-tts.md              local/cloud engines, cloning, chapters, RSS
 ```
 
 ## Build the upload zip
@@ -25,14 +26,13 @@ Upload the zip at <https://www.agensi.io/sell>.
 
 ## What the skill can and cannot do
 
-It carries the **scriptwriting workflow**: research a topic, write a timed episode in
-English or 10 Indian languages in monologue, interview or panel format, mark delivery
-(`[[pause:0.8]]`, `[[style:calm]]`), validate the result, and hand it to whatever TTS
-the environment has.
+It carries the **production workflow**: research and write a timed episode, validate it,
+refresh show notes and chapters, select source-grounded social clips, and drive an installed
+Podcast Brain Pro service or another available TTS tool.
 
-It does **not** carry the VibeVoice models. They are ~15 GB and a skill is delivered as
-text through the agent connection, so the local TTS path stays a documented reference
-pointing at this repository.
+It does **not** carry application code or model weights. Buyers who want local audio install
+the repository and its chosen engines. The skill never pretends those downloads or services
+exist when they do not.
 
 ## Before you publish it
 

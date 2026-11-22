@@ -2,24 +2,34 @@
 
 import { useMemo, useState } from "react";
 import { Studio } from "@/lib/useStudio";
-import { errorMessage } from "@/lib/studio-types";
+import { DELIVERY_STYLES, DeliveryStyle, errorMessage } from "@/lib/studio-types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorBanner, Field, SectionTitle, Select, TextArea, TextInput } from "./ui";
 import { CheckCircle, Download, FlaskConical, Mic, Play, ShieldCheck, Upload, XCircle } from "lucide-react";
 
+const QWEN_LANGUAGES = [
+  ["en", "English"], ["zh", "Chinese"], ["ja", "Japanese"], ["ko", "Korean"],
+  ["de", "German"], ["fr", "French"], ["ru", "Russian"], ["pt", "Portuguese"],
+  ["es", "Spanish"], ["it", "Italian"],
+] as const;
+
 export function VoiceLabView({ studio }: { studio: Studio }) {
   const [engineId, setEngineId] = useState("kokoro");
   const [voice, setVoice] = useState("");
   const [text, setText] = useState("Welcome to the show. This voice is running entirely on your machine.");
+  const [language, setLanguage] = useState("en");
+  const [style, setStyle] = useState<DeliveryStyle>("neutral");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resultUrl, setResultUrl] = useState<string | null>(null);
   const [resultName, setResultName] = useState("voice-lab.wav");
 
   const [cloneEngine, setCloneEngine] = useState("chatterbox");
+  const [cloneLanguage, setCloneLanguage] = useState("en");
   const [cloneText, setCloneText] = useState("This is my voice, cloned locally from a short recording.");
   const [reference, setReference] = useState<File | null>(null);
+  const [referenceText, setReferenceText] = useState("");
   const [consent, setConsent] = useState(false);
 
   const installed = useMemo(
@@ -36,7 +46,7 @@ export function VoiceLabView({ studio }: { studio: Studio }) {
     setBusy(true);
     setError(null);
     try {
-      const result = await studio.engineSpeak({ text, engine: engineId, voice: voice || undefined });
+      const result = await studio.engineSpeak({ text, engine: engineId, voice: voice || undefined, language, style });
       if (resultUrl) URL.revokeObjectURL(resultUrl);
       setResultUrl(result.url);
       setResultName(result.filename);
@@ -52,10 +62,14 @@ export function VoiceLabView({ studio }: { studio: Studio }) {
       setError("Choose a reference recording first: 5-10 seconds of clean speech.");
       return;
     }
+    if (cloneEngine === "qwen3-tts" && !referenceText.trim()) {
+      setError("Qwen3-TTS needs the exact transcript of the reference recording. This avoids downloading a separate transcription model.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      const result = await studio.cloneVoice({ text: cloneText, engine: cloneEngine, reference, consent });
+      const result = await studio.cloneVoice({ text: cloneText, engine: cloneEngine, reference, referenceText, language: cloneLanguage, consent });
       if (resultUrl) URL.revokeObjectURL(resultUrl);
       setResultUrl(result.url);
       setResultName(result.filename);
@@ -140,7 +154,7 @@ export function VoiceLabView({ studio }: { studio: Studio }) {
               <Select id={id} value={engineId} onChange={(e) => setEngineId(e.target.value)}>
                 {installed.length === 0 && <option value="kokoro">kokoro (not installed)</option>}
                 {installed
-                  .filter((e) => e.id !== "vibevoice")
+                  .filter((e) => e.id !== "vibevoice" && e.id !== "chatterbox")
                   .map((engine) => (
                     <option key={engine.id} value={engine.id}>
                       {engine.label}
@@ -151,9 +165,27 @@ export function VoiceLabView({ studio }: { studio: Studio }) {
           </Field>
           <Field label="Voice" hint={selectedEngine?.voices.join(", ") || "Leave empty for the default voice"}>
             {(id) => (
-              <TextInput id={id} value={voice} onChange={(e) => setVoice(e.target.value)} placeholder="af_heart" />
+              <TextInput id={id} value={voice} onChange={(e) => setVoice(e.target.value)} placeholder={engineId === "qwen3-tts" ? "Ryan" : "af_heart"} />
             )}
           </Field>
+        </div>
+        <div className="grid sm:grid-cols-2 gap-4 mb-4">
+          <Field label="Delivery style" hint={engineId === "qwen3-tts" ? "Qwen turns this into a natural-language voice instruction." : "Chatterbox maps this to expressiveness; Kokoro keeps its selected pace."}>
+            {(id) => (
+              <Select id={id} value={style} onChange={(e) => setStyle(e.target.value as DeliveryStyle)}>
+                {DELIVERY_STYLES.map((item) => <option key={item} value={item}>{item}</option>)}
+              </Select>
+            )}
+          </Field>
+          {engineId === "qwen3-tts" && (
+            <Field label="Language">
+              {(id) => (
+                <Select id={id} value={language} onChange={(e) => setLanguage(e.target.value)}>
+                  {QWEN_LANGUAGES.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+                </Select>
+              )}
+            </Field>
+          )}
         </div>
         <Field label="Text">
           {(id) => <TextArea id={id} rows={2} value={text} onChange={(e) => setText(e.target.value)} />}
@@ -175,7 +207,7 @@ export function VoiceLabView({ studio }: { studio: Studio }) {
           <EmptyState
             icon={<FlaskConical className="w-6 h-6" />}
             title="No cloning engine installed yet"
-            body="Install Chatterbox with 'pip install chatterbox-tts' (MIT licence) or Qwen3-TTS with 'pip install mlx-audio' (Apache-2.0). Chatterbox currently needs Python 3.10-3.12: its watermarking dependency chain breaks on Python 3.14."
+            body="Create the Python 3.12 MLX runtime with 'python3.12 -m venv .venv-mlx', then install voice-service/requirements-mlx.txt inside it. This supports Qwen3-TTS and Chatterbox without conflicting with VibeVoice."
           />
         ) : (
           <div className="space-y-4">
@@ -190,6 +222,15 @@ export function VoiceLabView({ studio }: { studio: Studio }) {
                 </Select>
               )}
             </Field>
+            {cloneEngine === "qwen3-tts" && (
+              <Field label="Reference and output language">
+                {(id) => (
+                  <Select id={id} value={cloneLanguage} onChange={(e) => setCloneLanguage(e.target.value)}>
+                    {QWEN_LANGUAGES.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+                  </Select>
+                )}
+              </Field>
+            )}
             <Field label="Reference recording" hint="5-10 seconds, one speaker, no music or background noise.">
               {(id) => (
                 <div className="flex items-center gap-3">
@@ -204,6 +245,19 @@ export function VoiceLabView({ studio }: { studio: Studio }) {
                 </div>
               )}
             </Field>
+            {cloneEngine === "qwen3-tts" && (
+              <Field label="Exact reference transcript" hint="Required by Qwen3-TTS Base. Providing it avoids an automatic Whisper transcription download.">
+                {(id) => (
+                  <TextArea
+                    id={id}
+                    rows={2}
+                    value={referenceText}
+                    onChange={(e) => setReferenceText(e.target.value)}
+                    placeholder="Type exactly what is spoken in the reference recording."
+                  />
+                )}
+              </Field>
+            )}
             <Field label="Text to speak">
               {(id) => <TextArea id={id} rows={2} value={cloneText} onChange={(e) => setCloneText(e.target.value)} />}
             </Field>
@@ -220,7 +274,7 @@ export function VoiceLabView({ studio }: { studio: Studio }) {
                 confirmation is stored next to the reference file.
               </span>
             </label>
-            <Button variant="primary" onClick={runClone} disabled={busy || !consent || !cloneText.trim()}>
+            <Button variant="primary" onClick={runClone} disabled={busy || !consent || !cloneText.trim() || (cloneEngine === "qwen3-tts" && !referenceText.trim())}>
               <Mic className="w-4 h-4" /> {busy ? "Cloning..." : "Clone and speak"}
             </Button>
           </div>

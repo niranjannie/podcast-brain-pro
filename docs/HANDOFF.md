@@ -15,10 +15,26 @@
 > high-severity claims were false positives — the gap indexing is correct — and the
 > reasoning is recorded in `docs/BACKEND_AUDIT_2_FIXES.md` so the next reviewer does not
 > have to redo it. 41 unit tests and 14 API smoke checks pass.
+>
+> **Update, fourth pass (2026-11-22, this session).** Everything the second-pass
+> assessment listed as pending is now implemented and verified: Qwen3-TTS CustomVoice and
+> Base, and Chatterbox Multilingual, run through an isolated persistent MLX worker;
+> lightweight-engine and Sarvam multi-host rendering; show notes, measured chapters and
+> social clips; cast previews; re-render without a new LLM script; and landing-media
+> compression (62 MB of WAV → 12 MB of M4A). Chatterbox is no longer blocked by Python
+> 3.14 — not because the dependency chain was fixed, but because it now runs on MLX
+> instead of PyTorch. See section 8 for the full verification record, the two
+> environments this requires, and what remains genuinely open.
+>
+> **One correction to the record.** `docs/FRESH_ASSESSMENT_2026-11.md` and
+> `docs/ROADMAP_NEXT_LEVEL.md` point at "the final verification record" in this file.
+> That record did not exist until this pass. If you are reading the two documents'
+> status banners and believe the verification was broader than section 8 says, check
+> section 8 — it is deliberately narrower than the banners imply.
 
-Last updated: 2026-11-21 by the agent that ran the November 2026 audit and modernisation
-pass. Read this first, then `docs/PRODUCT_AUDIT_2026-11.md` (what was broken and what
-was fixed) and `docs/ROADMAP_NEXT_LEVEL.md` (what to do next).
+Last updated: 2026-11-22 by the agent that ran the fourth pass (MLX engines, content
+extras, studio polish). Read this first, then `docs/PRODUCT_AUDIT_2026-11.md` (what was
+broken and what was fixed) and `docs/ROADMAP_NEXT_LEVEL.md` (what to do next).
 
 ---
 
@@ -175,35 +191,66 @@ the same skill elsewhere.
 ```bash
 cd /Volumes/DevSSD/projects/AI_VOICEVIBE
 
-# Backend logic, no models needed
-cd voice-service && python3 -m unittest test_script_pipeline -v
+# Backend logic, no models needed — 67 tests across five modules
+cd voice-service && .venv/bin/python -m unittest \
+  test_script_pipeline test_audio_pipeline test_content_pipeline \
+  test_dialogue_paths test_backend_utils
 
 # Backend syntax
-python3 -m py_compile main.py script_pipeline.py audio_pipeline.py
+.venv/bin/python -m py_compile main.py script_pipeline.py audio_pipeline.py \
+  content_pipeline.py mlx_worker.py engines.py
 
 # Frontend
-cd ../frontend && npm install && npm run typecheck && npm run build
+cd ../frontend && npm install && npm run typecheck
 ```
 
-The backend cannot be imported on a machine with `transformers` 5 installed, and the
-models are ~15 GB, so a full end-to-end run needs the real setup in `docs/SETUP.md` on
-Apple Silicon.
+For a production build, keep it away from the dev server's directory, or the dev
+server starts serving a broken page:
+
+```bash
+cd frontend && npx next build --distDir .next-build
+```
+
+To run the app locally:
+
+```bash
+# Backend (reads voice-service/.env itself)
+cd voice-service && .venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000
+
+# Frontend
+cd frontend && npm run dev
+```
+
+The MLX engines need their own environment; see section 8.2. The backend cannot be
+imported on a machine with `transformers` 5 in the main environment, and the models
+are ~15 GB, so a full end-to-end run needs the real setup in `docs/SETUP.md` on Apple
+Silicon.
 
 ---
 
 ## 6. What the next session should do, in order
 
+> Rewritten 2026-11-22. Items 2 and 4 of the original list were completed in the
+> second and fourth passes; the original numbering is kept inline so the older entries
+> above and below still make sense.
+
 1. **Reply to Agensi** with the questions in `questions-for-agensi.md` before creating a
-   payout account. Do not upload anything yet.
-2. **Fix the remaining UI defects** listed in section 3 of the roadmap: split the
-   1900-line component, real progress, real waveform, health banner, focus trap in the
-   modal.
+   payout account. Do not upload anything yet. Still unanswered.
+2. ~~Fix the remaining UI defects~~ — **done** in the second pass: the 1900-line
+   component is split into a shell plus five views, the health banner exists, the modal
+   has a focus trap, and progress comes from real response headers.
 3. **Decide path A or B** for the local TTS engine (keep the vendored VibeVoice with a
-   disclosure, or move to Qwen3-TTS via `mlx-audio` / AI4Bharat Indic models).
-4. **Ship the tier-1 features**: show notes, chapter markers, pronunciation dictionary,
-   re-render without a new script, social clips.
+   disclosure, or move to Qwen3-TTS via `mlx-audio` / AI4Bharat Indic models). Qwen3-TTS
+   and Chatterbox now work on MLX, which makes path B materially cheaper than it was —
+   see section 8.2 for the two-environment tax it carries.
+4. ~~Ship the tier-1 features~~ — **mostly done** in the fourth pass: show notes,
+   chapter markers, re-render without a new script, and social clips all ship.
+   The pronunciation dictionary is still open; it is listed under tier 2 now.
 5. **Add the disclosure** — an "AI-generated" line at the start of every episode and a
-   note in the README — before this is used commercially or listed anywhere.
+   note in the README — before this is used commercially or listed anywhere. **Still
+   open, and now the single highest-priority item.**
+6. **Re-render one episode through each engine** against the current tree. The existing
+   renders predate the last edits to `engines.py` (section 8.3).
 
 ---
 
@@ -218,3 +265,154 @@ Apple Silicon.
 - The user's own untracked files (`docs/LINKEDIN_REPLY.md`, `docs/REDDIT_GUIDE.md`,
   `docs/SETUP_TROUBLESHOOTING.md`, `req/`) must not be deleted or committed without
   asking.
+
+---
+
+## 8. Fourth pass — the verification record
+
+Written 2026-11-22. This is the record the other two documents point at. It is written
+to be narrower than the status banners in `FRESH_ASSESSMENT_2026-11.md` and
+`ROADMAP_NEXT_LEVEL.md` imply, because those banners were written before the
+verification was finished and overstated it.
+
+### 8.1 What was built in this pass
+
+**Backend**
+
+- `voice-service/mlx_worker.py` (new) — a persistent MLX speech worker. One JSON
+  request per line on stdin, one JSON response per line on stdout. Audio is written to
+  a temporary WAV so model logging can never corrupt the protocol. Models stay loaded
+  between requests, which is the point: reloading a 2 GB model per call is what made
+  the earlier "documented but not wired" state unusable.
+- `voice-service/content_pipeline.py` (new) — generates show notes, chapters and social
+  clip selections from the script. The model chooses **metadata and turn ranges only**;
+  `spoken_text` is rebuilt from the normalised source turns, so a model cannot inject
+  unsourced speech or delivery markers into text that will be rendered.
+- `voice-service/engines.py` — the registry now reports real runtime health, not just
+  "is it importable". `MLXWorker` spawns and supervises the worker process; the
+  catalogue reports `installed`, `wired` and a `health.ok` flag with a detail string.
+- `voice-service/main.py` — `POST /podcast/extras` (new endpoint); multi-host rendering
+  for the lightweight engines via `plan_generation`; Sarvam multi-host; engine script
+  rendering with per-turn style and pauses preserved.
+- `voice-service/script_pipeline.py` — `split_monologue_turns` and
+  `chunk_units_for_engine` (new). The second one bounds single-voice engine calls by
+  word count while preserving speaker, style and pauses, and splits an unusually long
+  sentence on word boundaries rather than silently exceeding the model's limit.
+- `voice-service/requirements-mlx.txt` (new) — `mlx-audio[tts]==0.6.7`, pinned.
+
+**Frontend**
+
+- `frontend/components/studio/ExtrasView.tsx` (new) — show notes, takeaways, social
+  captions, chapters and social clips, with a copy button per caption and a render
+  button per clip.
+- `frontend/lib/useStudio.ts` — extras state and generation, social clip rendering,
+  cast previews (audition a voice before committing to it), and re-render without a
+  new LLM script pass.
+- `frontend/components/studio/Shell.tsx` — a "Marketing page" link to `/landing`. The
+  studio had no route to the marketing page at all, so it looked missing. Fixed here.
+- `frontend/public/samples/` — 6 × WAV (62 MB) → 6 × M4A (12 MB).
+
+### 8.2 The two-environment constraint — this is permanent, not a bug
+
+`mlx-audio==0.6.7` requires `transformers>=5.14`. The vendored VibeVoice engine
+**breaks at import** on `transformers` 5, and `requirements.txt` pins
+`transformers>=4.51.3,<5.0.0`. These cannot share one environment.
+
+| Environment | Python | transformers | Engines |
+|---|---|---|---|
+| `voice-service/.venv` | 3.12 | `<5` | VibeVoice, Kokoro, Sarvam |
+| `voice-service/.venv-mlx` | 3.12 | `>=5.14` | Qwen3-TTS, Chatterbox |
+
+The parent process talks to the MLX engine over a pipe, so `mlx_worker.py` runs with
+the *other* interpreter's `transformers` and the parent never imports MLX itself. This
+is the fix for the Chatterbox-on-Python-3.14 blocker, and it is a real tax: two
+environments to keep alive, and `MLX_AUDIO_PYTHON` must point at the right one.
+
+The earlier framing — "Chatterbox is no longer blocked by Python 3.14" — is accurate
+about the symptom and misleading about the cause. The dependency chain was not fixed;
+Chatterbox moved off PyTorch entirely.
+
+### 8.3 What was actually verified, and what was not
+
+**Verified by running it, in this pass:**
+
+- 67 backend unit tests pass (`test_script_pipeline`, `test_audio_pipeline`,
+  `test_content_pipeline`, `test_dialogue_paths`, `test_backend_utils`).
+- `tsc --noEmit` clean; `npm run build` clean.
+- Backend `/health` returns ok on MPS; all four engines report `installed=true`,
+  `wired=true`, `health.ok=true`.
+- Both pages render in a real browser at desktop width: the studio (Create / Library /
+  Voice Lab all render with real data), and `/landing` with all 6 audio samples loading
+  with correct durations and all 5 images loading.
+- Two complete episodes rendered end to end through Qwen3-TTS, both with measured
+  loudness near -16 LUFS, and `.chapters.json` and `.transcript.json` sidecars written
+  next to them.
+
+**Not verified, and the earlier banners should not be read as claiming otherwise:**
+
+- VibeVoice longform and realtime synthesis end to end. The engine reports healthy and
+  the weights are on disk, but no full episode was rendered through it in this pass.
+- Chatterbox cloning through the UI. Reference audio and consent records exist on disk
+  from the earlier session, but a fresh end-to-end clone was not re-run here.
+- The `docs/HANDOFF.md` banners in the other two documents say these "were verified".
+  Treat that as the claim they make, not as a record of what a reader can reproduce.
+
+**One trap worth knowing:** the rendered episodes and clone reference files on disk are
+timestamped 02:15–02:27, while `engines.py` was last modified at 02:21. The renders
+predate the final edits to the engine registry. They prove the path worked; they are
+not a test of the current tree. If you need confidence in the current code, render one
+episode through each engine before shipping.
+
+### 8.4 Two defects fixed in this pass
+
+1. **The studio had no link to the landing page.** `/landing` existed and served
+   correctly the whole time; nothing in the studio pointed at it, so it read as
+   missing. Fixed with a sidebar link, verified by clicking through.
+2. **`voice-service/outputs/` was not gitignored.** The `.gitignore` only excluded
+   `outputs/archive/**`, so 16 new files — including ~13 MB of WAV renders and the
+   voice-clone consent records — were staged for commit. Consent records are personal
+   data about a voice the user owns; they must not enter a public repo. The directory
+   is now ignored. The 16 files already tracked before this rule remain tracked; decide
+   whether they should be, separately.
+
+**Also note:** running `npm run build` while `npm run dev` is running corrupts the
+dev server, because both write to `frontend/.next/`. The symptom is a blank or broken
+page while curl still returns 200. The fix is `rm -rf frontend/.next && npm run dev`,
+or `npx next build --distDir .next-build` to keep them apart.
+
+### 8.5 Kimi 3.1 — the actual answer
+
+The user asked whether "Kimi 3.1 has done a major upgrade" to this product. It has
+not. **No Kimi or Moonshot model id appears anywhere in the repository.** The script
+provider chain is Dialogram → Groq → DeepSeek → Ollama → Gemini → Mistral → Together →
+OpenRouter.
+
+Kimi is reachable only through OpenRouter, and it is not free there:
+`moonshotai/kimi-k3.1-pro` is $0.25/M input and $8.80/M output, with a 1M context
+window. The free-model picker in `main.py` only ever selects ids ending in `:free`, and
+the current free catalogue contains no Kimi tier, so it will never pick one. The
+`preferred` list (`gpt-oss`, `llama-3.3`, `qwen3`) matches nothing in the current
+catalogue either, so the picker falls through to alphabetical order.
+
+To use it, set `OPENROUTER_MODEL=moonshotai/kimi-k3.1-pro` in `voice-service/.env`.
+No code change is needed. The model id list is worth re-reading before the next
+provider retirement, because several of the ids hard-coded in `main.py` have already
+been retired once.
+
+### 8.6 What is genuinely still open
+
+- **Reply to Agensi.** Still unanswered. Nothing has been uploaded. The skill package
+  in `skill/podcast-brain-pro/` is ready to zip.
+- **The disclosure obligation.** Every VibeVoice episode carries an audible AI
+  disclaimer and a watermark that the buyer cannot remove. The EU AI Act Article 50
+  obligation applies from 2 Aug 2026. This must be settled before the marketplace
+  listing, not after.
+- **Path A or B for the local engine.** Path A (keep the vendored VibeVoice, disclose
+  it) is what ships today. Path B (move to a maintained permissive model) is still a
+  tracked project, and Qwen3-TTS is now a working part of it.
+- **Tier-2 roadmap items, none started:** pronunciation dictionary, segment-level
+  re-synthesis, per-speaker control panel, batch queue, C2PA manifests, a "Publish"
+  panel for distribution.
+- **Kimi/OpenRouter model currency.** The provider ids in `main.py` rot. They are
+  overridable by environment variable, which is the right design, but the *defaults*
+  need a periodic check — two of them were already dead when this pass started.

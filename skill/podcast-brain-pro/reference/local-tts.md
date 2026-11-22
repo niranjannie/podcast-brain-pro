@@ -1,123 +1,144 @@
-# Local TTS with VibeVoice (private, on the user's own machine)
+# Local TTS with Podcast Brain Pro
 
-This is the path that keeps audio generation local: no cloud TTS, no per-minute billing,
-nothing leaves the machine. It is also the heaviest path - roughly 15 GB of models and a
-GPU-class machine - so check the prerequisites before you start.
+The service separates script generation from audio synthesis. VibeVoice, Kokoro,
+Qwen3-TTS, and Chatterbox can run locally; Sarvam is the hosted Indic-language path.
+Models are downloaded only when selected. Current MLX Audio needs dependencies that
+conflict with VibeVoice, so Qwen/Chatterbox use an isolated, persistent worker.
 
 ## Prerequisites
 
-- macOS on Apple Silicon (M1-M4), or Linux/Windows with an NVIDIA GPU
-- Python 3.10+
-- ~15 GB free disk for model weights
-- Source: https://github.com/niranjannie/podcast-brain-pro (MIT)
+- macOS Apple Silicon for Qwen3-TTS/Chatterbox MLX; VibeVoice also supports CUDA
+- Python 3.12 and Node.js 18+
+- ffmpeg for loudness normalization and compressed Sarvam codecs
+- espeak-ng for Kokoro (`brew install espeak-ng` on macOS)
 
-## Setup
+## Main application setup
 
 ```bash
 git clone https://github.com/niranjannie/podcast-brain-pro.git
-cd podcast-brain-pro
-
-cd voice-service
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cd ../vibevoice-src && pip install -e . && cd ../voice-service
-
-cp .env.example .env     # add at least one LLM provider key for script generation
-
-source .venv/bin/activate
-uvicorn main:app --host 0.0.0.0 --port 8000
+cd podcast-brain-pro/voice-service
+python3.12 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -e ../vibevoice-src
+.venv/bin/pip install kokoro
+cp .env.example .env  # configure a script provider and optional Sarvam key
+.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-Then:
+VibeVoice loads lazily on first use. Set `LONGFORM_PRELOAD_AT_STARTUP=true` only if you
+intentionally want to preload its 1.5B model at startup.
+
+## Qwen3-TTS and Chatterbox MLX setup
+
+Keep this environment separate from the main environment:
 
 ```bash
-curl http://localhost:8000/health
+cd voice-service
+python3.12 -m venv .venv-mlx
+.venv-mlx/bin/pip install -r requirements-mlx.txt
 ```
 
-## Voices
+The app finds `.venv-mlx/bin/python` automatically. Override with `MLX_AUDIO_PYTHON`.
+The worker starts on first use and keeps models loaded between requests.
 
-Longform voices live in `vibevoice-src/demo/voices` (`.wav` reference clips).
-Streaming voices live in `vibevoice-src/demo/voices/streaming_model` (`.pt` files).
+Defaults:
 
-Longform reference clips currently shipped:
+- Qwen presets/style: `mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit`
+- Qwen cloning: `mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit`
+- Chatterbox cloning: `mlx-community/chatterbox-multilingual-v3`
 
-| file | voice |
-|---|---|
-| `en-Alice_woman.wav` | Alice (en, woman) |
-| `en-Carter_man.wav` | Carter (en, man) |
-| `en-Frank_man.wav` | Frank (en, man) |
+Override them with `QWEN3_TTS_MODEL`, `QWEN3_TTS_BASE_MODEL`, and
+`CHATTERBOX_MLX_MODEL`. Qwen supports English, Chinese, Japanese, Korean, German,
+French, Russian, Portuguese, Spanish, and Italian—not Indian languages.
 
-Streaming model voices include `en-Carter_man`, `en-Davis_man`, `en-Emma_woman`,
-`en-Frank_man`, `en-Grace_woman`, `en-Mike_man`, plus `de`, `fr`, `in-Samuel_man`,
-`it`, `jp`, `kr`, `nl`, `pl`, `pt`, `sp` variants.
+## Voices and multi-host episodes
 
-Override the directories with `VOICES_DIR` and `LONGFORM_VOICES_DIR` if you keep the
-models elsewhere.
+`GET /voices` returns VibeVoice presets and consented cloned voices. `GET /engines`
+returns install/runtime health, model cost, licences, voices, and cloning support.
 
-## Longform TTS request
-
-```
-POST /tts/longform
-Content-Type: application/json
-```
+`POST /tts/longform` accepts the generated script directly. Both `speaker` and the
+legacy `role` key are accepted; no manual key conversion is needed.
 
 ```json
 {
   "script": [
-    { "role": "Host", "content": "Welcome back to the show..." },
-    { "role": "Guest", "content": "Thanks for having me..." }
+    {"speaker": "Host", "content": "Welcome to the show."},
+    {"speaker": "Guest", "content": "[[style:warm]] Thanks for having me."}
   ],
-  "voice_names": ["en-Carter_man", "en-Alice_woman"],
-  "cfg_scale": 1.3,
+  "engine": "qwen3-tts",
+  "voice_names": ["Ryan", "Aiden"],
+  "style": "neutral",
+  "language": "en",
   "save_to_disk": true,
-  "topic": "my episode",
-  "format": "interview",
-  "language": "en"
+  "topic": "my episode"
 }
 ```
 
-The response is `audio/wav` streamed back, with headers `X-Saved-Filename`,
-`X-Chunks-Used`, and `X-Gen-Time-Sec`.
+Use `engine: "vibevoice"` (the default), `"kokoro"`, `"qwen3-tts"`, or
+`"chatterbox"`. Kokoro and Qwen have preset voices. Chatterbox requires consented
+reference voices created through Voice Lab; Qwen can mix presets and consented clones.
+The backend renders per turn and stitches real silence for `[[pause:0.8]]`.
 
-Important: the TTS endpoints read the speaker name from the **`role`** key of each turn
-(`item.get("role", ...)`). The script generator returns the same data under **`speaker`**.
-If you pipe generator output straight into `/tts/longform`, every turn falls back to
-`Speaker 1`, `Speaker 2`, ... and the voice mapping is wrong. Rename the key before
-calling:
+For a single voice preview, `POST /tts/engine` accepts `{text, engine, voice,
+language, style, save_to_disk}`. For VibeVoice monologues, use `/tts/realtime` with
+`{text, speaker_name, style, save_to_disk}`.
 
-```python
-turns = [{"role": t["speaker"], "content": t["content"]} for t in script]
-```
+## Consent-gated voice cloning
 
-`voice_names` must be in the same order as the turns' speakers, one voice per speaker.
+`POST /tts/clone` is multipart form data:
 
-## Single turn
+- `text`: new words to speak
+- `engine`: `qwen3-tts` or `chatterbox`
+- `reference`: 5–10 seconds of clean, single-speaker audio
+- `reference_text`: exact reference transcript; **required for Qwen** so no Whisper
+  model is downloaded
+- `language`: for example `en`
+- `consent`: must be `true`
 
-```
-POST /tts/realtime
-```
+Only clone your own voice or one for which you have written permission. The service
+stores the reference and a consent record. Those voices then appear in `/voices` and
+can be reused in previews and multi-host episodes.
+
+## Indian-language conversations
+
+`POST /tts/sarvam` requires `SARVAM_API_KEY`. In addition to the original single-text
+fields, provide `script` and `voice_names` for per-turn voices:
 
 ```json
-{ "text": "One sentence to speak.", "speaker_name": "Carter", "cfg_scale": 1.5, "save_to_disk": false }
+{
+  "text": "Fallback plain-text form of the script",
+  "script": [
+    {"speaker": "Host", "content": "स्वागत है।"},
+    {"speaker": "Guest", "content": "धन्यवाद।"}
+  ],
+  "voice_names": ["shubh", "shreya"],
+  "target_language_code": "hi-IN",
+  "language": "hi-IN",
+  "output_audio_codec": "wav",
+  "save_to_disk": true
+}
 ```
 
-## Chunking limits
+Sarvam uses ISO 639-1 codes; the app maps Odia `od-IN` to `or-IN`. English requests can
+fall back to the full VibeVoice longform pipeline with transcript/extras preserved. Indic
+requests return 503 when Sarvam is unavailable instead of saving unsupported local output.
 
-Longform synthesis splits text into chunks at sentence boundaries, so long episodes are
-stitched from multiple passes. Defaults: 350 words per chunk on MPS, 300 on CPU
-(`MAX_LONGFORM_WORDS_MPS`, `MAX_LONGFORM_WORDS_CPU`). Lower values reduce RAM but
-increase stitch gaps. Lower `LONGFORM_DDPM_STEPS` (default 5) to go faster at some
-quality cost.
+## Show notes, chapters, and social clips
 
-## Optional cloud TTS for Indian languages
+- `POST /podcast/generate` with `include_extras: true` returns validated show notes,
+  chapters, five captions, and up to three source-grounded social clip selections.
+- `POST /podcast/extras` refreshes those extras for an existing/edited script without
+  rewriting it.
+- Chapter starts are measured from rendered audio and saved as
+  `<episode>.chapters.json`. RSS emits `<podcast:chapters>` only when timings exist.
+- Render social clips from the selected original turns; do not synthesize an LLM-written
+  paraphrase as though it were part of the episode.
 
-`POST /tts/sarvam` with `SARVAM_API_KEY` set gives Sarvam voices for Hindi, Tamil,
-Telugu, Kannada, Bengali, Marathi, Gujarati, Malayalam, Punjabi and Odia. It falls back
-to local VibeVoice when the call fails. Use this when the user needs an Indian language
-and does not want to wait for a local model.
+## Output and RSS
 
-## RSS feed
+Saved episodes include WAV audio, metadata JSON, transcript JSON, and chapter JSON when
+available. Rename and delete operations keep all sidecars together. Exports are
+normalized to -16 LUFS with a -1.5 dBTP ceiling when ffmpeg is available.
 
-`GET /feed/podcast.rss` returns the RSS feed built from the episodes saved under the
-output directory. It carries the title, description, publication date, duration and an
-enclosure per episode, so the same feed can be pointed at any podcast host.
+`GET /feed/podcast.rss` emits transcript and chapter links. Set `PUBLIC_BASE_URL`,
+channel metadata, artwork, and owner email before submitting the feed to a host.

@@ -5,6 +5,7 @@ __pycache__/
 *.so
 .Python
 .venv/
+.venv-mlx/
 env/
 venv/
 ENV/
@@ -54,7 +55,10 @@ dist/
 
 # Playwright MCP session data
 .playwright-mcp/
-voice-service/outputs/archive/**
+
+# Generated episodes, transcripts, chapters and voice-clone consent records.
+# Files already tracked before this rule stay tracked; nothing new is added.
+voice-service/outputs/
 
 # Personal marketing materials (not for repo)
 MARKETING.md

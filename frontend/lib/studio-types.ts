@@ -31,6 +31,30 @@ export interface LoudnessInfo {
   true_peak_db: number;
 }
 
+export interface Chapter {
+  title: string;
+  start_turn: number;
+  startTime?: number;
+}
+
+export interface SocialClip {
+  title: string;
+  start_turn: number;
+  end_turn: number;
+  caption: string;
+  spoken_text: string;
+}
+
+export interface ContentExtras {
+  title: string;
+  summary: string;
+  description: string;
+  takeaways: string[];
+  social_captions: string[];
+  chapters: Chapter[];
+  social_clips: SocialClip[];
+}
+
 export interface HistoryItem {
   filename: string;
   size_bytes: number;
@@ -43,6 +67,8 @@ export interface HistoryItem {
   provider?: string;
   duration_seconds?: number;
   engine?: string;
+  has_transcript?: boolean;
+  extras?: ContentExtras;
   loudness?: LoudnessInfo;
 }
 
@@ -51,11 +77,13 @@ export interface VoiceInfo {
   language: string;
   gender: string;
   name: string;
+  engine?: string;
 }
 
 export interface VoiceCatalogue {
   longform: VoiceInfo[];
   streaming: VoiceInfo[];
+  cloned: VoiceInfo[];
   styles: string[];
 }
 

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ConfigStatus,
+  ContentExtras,
   DeliveryStyle,
   EngineInfo,
   Format,
@@ -10,8 +11,8 @@ import {
   Language,
   ModelStatus,
   ScriptLine,
+  SocialClip,
   VoiceCatalogue,
-  VoiceInfo,
   countWords,
   errorMessage,
   isAbortError,
@@ -26,6 +27,13 @@ const SARVAM_VOICES = [
 const LONGFORM_FALLBACK = ["Alice", "Carter", "Frank"];
 const REALTIME_FALLBACK = ["Carter", "Emma", "Davis", "Grace", "Mike", "Wayne"];
 const HISTORY_PAGE = 20;
+const AUDIO_BACKEND_URL = (
+  process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000"
+).replace(/\/$/, "");
+
+function audioEndpoint(path: string): string {
+  return `${AUDIO_BACKEND_URL}${path}`;
+}
 
 export function getSpeakers(format: Format, names: string[]): string[] {
   if (format === "monologue") return [names[0] || "Host"];
@@ -42,9 +50,10 @@ export function useStudio() {
   const [speakerNames, setSpeakerNames] = useState(["Host", "Guest", "Guest 2"]);
   const [voiceSelections, setVoiceSelections] = useState<string[]>([]);
   const [deliveryStyle, setDeliveryStyle] = useState<DeliveryStyle>("neutral");
+  const [episodeEngine, setEpisodeEngine] = useState("vibevoice");
 
   // ---- Catalogues ----
-  const [voices, setVoices] = useState<VoiceCatalogue>({ longform: [], streaming: [], styles: [] });
+  const [voices, setVoices] = useState<VoiceCatalogue>({ longform: [], streaming: [], cloned: [], styles: [] });
   const [engines, setEngines] = useState<EngineInfo[]>([]);
   const [config, setConfig] = useState<Record<string, ConfigStatus>>({});
 
@@ -53,6 +62,9 @@ export function useStudio() {
   const [scriptStats, setScriptStats] = useState("");
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
   const [scriptError, setScriptError] = useState<string | null>(null);
+  const [extras, setExtras] = useState<ContentExtras | null>(null);
+  const [extrasError, setExtrasError] = useState<string | null>(null);
+  const [isGeneratingExtras, setIsGeneratingExtras] = useState(false);
   const [editedLines, setEditedLines] = useState<Record<number, string>>({});
   const [hasEdits, setHasEdits] = useState(false);
 
@@ -81,6 +93,7 @@ export function useStudio() {
   const scriptAbortRef = useRef<AbortController | null>(null);
   const audioAbortRef = useRef<AbortController | null>(null);
   const scriptRunIdRef = useRef(0);
+  const extrasRunIdRef = useRef(0);
   const audioTimerRef = useRef<number | undefined>(undefined);
 
   // ---- Derived ----
@@ -90,14 +103,24 @@ export function useStudio() {
 
   const availableVoices = useMemo(() => {
     if (isIndic) return SARVAM_VOICES;
+    if (episodeEngine === "chatterbox") {
+      return voices.cloned.filter((voice) => voice.engine === "chatterbox").map((voice) => voice.id);
+    }
+    if (episodeEngine === "kokoro" || episodeEngine === "qwen3-tts") {
+      const engineVoices = engines.find((engine) => engine.id === episodeEngine)?.voices ?? [];
+      const cloned = episodeEngine === "qwen3-tts"
+        ? voices.cloned.filter((voice) => voice.engine === "qwen3-tts").map((voice) => voice.id)
+        : [];
+      return [...engineVoices, ...cloned];
+    }
     const catalogue = (usesLongform ? voices.longform : voices.streaming).map((v) => v.id);
     if (catalogue.length > 0) return catalogue;
     return usesLongform ? LONGFORM_FALLBACK : REALTIME_FALLBACK;
-  }, [isIndic, usesLongform, voices]);
+  }, [isIndic, episodeEngine, usesLongform, voices, engines]);
 
   const voiceLabels = useMemo(() => {
     const labels: Record<string, string> = {};
-    for (const voice of [...voices.longform, ...voices.streaming]) {
+    for (const voice of [...voices.longform, ...voices.streaming, ...voices.cloned]) {
       labels[voice.id] = `${voice.name} (${voice.gender})`;
     }
     return labels;
@@ -108,14 +131,22 @@ export function useStudio() {
     [script]
   );
 
-  const requiredModel = isIndic ? null : usesLongform ? modelStatus?.longform : modelStatus?.realtime;
-  const modelCached = isIndic ? true : (requiredModel?.cached ?? false);
-  const modelReady = isIndic ? true : (requiredModel?.loaded ?? false);
+  const usesVibeVoice = episodeEngine === "vibevoice";
+  const selectedEngineInfo = engines.find((engine) => engine.id === episodeEngine);
+  const requiredModel = isIndic || !usesVibeVoice
+    ? null
+    : usesLongform
+      ? modelStatus?.longform
+      : modelStatus?.realtime;
+  const modelCached = isIndic || !usesVibeVoice ? true : (requiredModel?.cached ?? false);
+  const modelReady = isIndic || !usesVibeVoice ? true : (requiredModel?.loaded ?? false);
   const engineLabel = isIndic
     ? "Sarvam Cloud"
-    : usesLongform
-      ? "VibeVoice Longform 1.5B"
-      : "VibeVoice Realtime 0.5B";
+    : !usesVibeVoice
+      ? selectedEngineInfo?.label ?? episodeEngine
+      : usesLongform
+        ? "VibeVoice Longform 1.5B"
+        : "VibeVoice Realtime 0.5B";
 
   const filteredHistory = useMemo(() => {
     const needle = historySearch.trim().toLowerCase();
@@ -149,6 +180,22 @@ export function useStudio() {
     }
   }, []);
 
+  const fetchVoices = useCallback(async () => {
+    try {
+      const res = await fetch("/api/voices");
+      if (!res.ok) return;
+      const data = await res.json();
+      setVoices({
+        longform: data.longform ?? [],
+        streaming: data.streaming ?? [],
+        cloned: data.cloned ?? [],
+        styles: data.styles ?? [],
+      });
+    } catch {
+      // Existing presets remain available when the backend is offline.
+    }
+  }, []);
+
   const fetchSystem = useCallback(async () => {
     try {
       const health = await fetch("/api/health", { cache: "no-store" });
@@ -168,19 +215,7 @@ export function useStudio() {
     fetchConfig();
     loadHistory(HISTORY_PAGE);
     fetchSystem();
-
-    fetch("/api/voices")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data) {
-          setVoices({
-            longform: data.longform ?? [],
-            streaming: data.streaming ?? [],
-            styles: data.styles ?? [],
-          });
-        }
-      })
-      .catch(() => undefined);
+    fetchVoices();
 
     fetch("/api/engines")
       .then((res) => (res.ok ? res.json() : null))
@@ -188,7 +223,7 @@ export function useStudio() {
         if (data) setEngines(data.engines ?? []);
       })
       .catch(() => undefined);
-  }, [fetchConfig, loadHistory, fetchSystem]);
+  }, [fetchConfig, loadHistory, fetchSystem, fetchVoices]);
 
   // Poll the backend, but only while the tab is visible.
   useEffect(() => {
@@ -247,9 +282,13 @@ export function useStudio() {
   async function generateScript() {
     if (!topic.trim() || isGeneratingScript) return;
     const runId = ++scriptRunIdRef.current;
+    extrasRunIdRef.current += 1;
+    setIsGeneratingExtras(false);
     setIsGeneratingScript(true);
     setScript(null);
     setScriptError(null);
+    setExtras(null);
+    setExtrasError(null);
     setScriptStats("");
     if (audioUrl) URL.revokeObjectURL(audioUrl);
     setAudioUrl(null);
@@ -268,12 +307,15 @@ export function useStudio() {
           speakers,
           language,
           style: deliveryStyle,
+          include_extras: true,
         }),
       });
       if (!res.ok) throw new Error(await readError(res));
       const data = await res.json();
       if (runId !== scriptRunIdRef.current) return;
       setScript(data.script);
+      setExtras(data.extras ?? null);
+      setExtrasError(data.extras_error ?? null);
       const shortNote = data.under_target ? " · shorter than requested" : "";
       setScriptStats(`${data.word_count} words · ${data.generation_time_seconds}s${shortNote}`);
     } catch (error) {
@@ -296,10 +338,18 @@ export function useStudio() {
     const updated = script.map((line, index) => ({
       ...line,
       content: editedLines[index] !== undefined ? editedLines[index] : line.content,
-    }));
+    })).filter((line) => line.content.trim());
+    if (!updated.length) {
+      setScriptError("The script needs at least one non-empty turn");
+      return;
+    }
     setScript(updated);
+    extrasRunIdRef.current += 1;
+    setIsGeneratingExtras(false);
     setHasEdits(false);
     setEditedLines({});
+    setExtras(null);
+    setExtrasError("Script changed. Refresh show notes, chapters, and clips before rendering.");
     setScriptStats(`${updated.reduce((sum, line) => sum + countWords(line.content), 0)} words · edited`);
   }
 
@@ -314,12 +364,136 @@ export function useStudio() {
     editLine(index, `${current.replace(/\s+$/, "")} [[pause:0.6]]`);
   }
 
+  function renameSpeaker(index: number, value: string) {
+    const previous = speakers[index];
+    const nextNames = [...speakerNames];
+    nextNames[index] = value;
+    setSpeakerNames(nextNames);
+    if (script && value.trim() && previous !== value.trim()) {
+      const nextName = value.trim();
+      setScript(script.map((line) => line.speaker === previous ? { ...line, speaker: nextName } : line));
+      extrasRunIdRef.current += 1;
+      setIsGeneratingExtras(false);
+      setExtras(null);
+      setExtrasError("Cast changed. Refresh show notes, chapters, and clips before rendering.");
+    }
+  }
+
+  async function generateExtras() {
+    if (!script || !topic.trim() || isGeneratingExtras) return;
+    const runId = ++extrasRunIdRef.current;
+    setIsGeneratingExtras(true);
+    setExtrasError(null);
+    try {
+      const res = await fetch("/api/podcast/extras", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic: topic.trim(),
+          script,
+          duration_minutes: duration,
+          format,
+          language,
+        }),
+      });
+      if (!res.ok) throw new Error(await readError(res));
+      const data = await res.json();
+      if (runId !== extrasRunIdRef.current) return;
+      setExtras(data.extras);
+    } catch (error) {
+      if (runId === extrasRunIdRef.current) setExtrasError(errorMessage(error));
+    } finally {
+      if (runId === extrasRunIdRef.current) setIsGeneratingExtras(false);
+    }
+  }
+
   // ---- Audio actions ----
   function cancelAudio() {
     audioAbortRef.current?.abort();
     window.clearInterval(audioTimerRef.current);
     setIsGeneratingAudio(false);
     setAudioStatusText("Cancelled");
+  }
+
+  async function requestAudio(
+    turns: ScriptLine[],
+    persist: boolean,
+    requestTopic: string,
+    signal?: AbortSignal,
+  ): Promise<Response> {
+    const normalizedTurns = turns.filter((line) => line.content.trim());
+    const castOrder: string[] = [];
+    for (const line of normalizedTurns) {
+      if (!castOrder.includes(line.speaker)) castOrder.push(line.speaker);
+    }
+    const voiceNames = castOrder.map((speaker) => {
+      const configuredIndex = speakers.indexOf(speaker);
+      const selectionIndex = configuredIndex >= 0 ? configuredIndex : castOrder.indexOf(speaker);
+      return voiceSelections[selectionIndex] ?? speaker;
+    });
+    const requestExtras = persist ? extras : null;
+
+    if (isIndic) {
+      return fetch(audioEndpoint("/tts/sarvam"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal,
+        body: JSON.stringify({
+          text: normalizedTurns.map((line) => line.content).join("\n\n"),
+          script: normalizedTurns,
+          voice_names: voiceNames,
+          target_language_code: language,
+          speaker: voiceNames[0] || "shubh",
+          pace: 1.0,
+          model: "bulbul:v3",
+          output_audio_codec: "wav",
+          save_to_disk: persist,
+          topic: requestTopic || undefined,
+          format,
+          language,
+          duration_minutes: duration,
+          style: deliveryStyle,
+          extras: requestExtras,
+        }),
+      });
+    }
+
+    if (usesLongform || !usesVibeVoice) {
+      return fetch(audioEndpoint("/tts/longform"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal,
+        body: JSON.stringify({
+          script: normalizedTurns,
+          voice_names: voiceNames,
+          engine: episodeEngine,
+          style: deliveryStyle,
+          save_to_disk: persist,
+          topic: requestTopic || undefined,
+          format,
+          language,
+          duration_minutes: duration,
+          extras: requestExtras,
+        }),
+      });
+    }
+
+    return fetch(audioEndpoint("/tts/realtime"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal,
+      body: JSON.stringify({
+        text: normalizedTurns.map((line) => line.content).join("\n\n"),
+        speaker_name: voiceNames[0] || "Carter",
+        style: deliveryStyle,
+        save_to_disk: persist,
+        topic: requestTopic || undefined,
+        format,
+        language,
+        duration_minutes: duration,
+        extras: requestExtras,
+      }),
+    });
   }
 
   async function generateAudio() {
@@ -333,6 +507,7 @@ export function useStudio() {
     setAudioStatusText("Starting the engine...");
 
     const startedAt = Date.now();
+    const extrasRunId = extrasRunIdRef.current;
     window.clearInterval(audioTimerRef.current);
     audioTimerRef.current = window.setInterval(() => {
       setAudioElapsed(Math.floor((Date.now() - startedAt) / 1000));
@@ -353,65 +528,7 @@ export function useStudio() {
     }, 35 * 60 * 1000);
 
     try {
-      let res: Response;
-      if (isIndic) {
-        const fullText = script.map((line) => line.content).join("\n\n");
-        res = await fetch("/api/tts/sarvam", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: abortCtrl.signal,
-          body: JSON.stringify({
-            text: fullText,
-            target_language_code: language,
-            speaker: voiceSelections[0] || "shubh",
-            pace: 1.0,
-            model: "bulbul:v3",
-            output_audio_codec: "wav",
-            save_to_disk: true,
-            topic: topic.trim() || undefined,
-            format,
-            language,
-          }),
-        });
-      } else if (usesLongform) {
-        // Real speaker names go over the wire; the backend maps them to voices.
-        const castOrder: string[] = [];
-        for (const line of script) {
-          if (!castOrder.includes(line.speaker)) castOrder.push(line.speaker);
-        }
-        const voiceNames = castOrder.map(
-          (speaker) => voiceSelections[Math.max(0, speakers.indexOf(speaker))] ?? speaker
-        );
-        res = await fetch("/api/tts/longform", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: abortCtrl.signal,
-          body: JSON.stringify({
-            script: script.map((line) => ({ speaker: line.speaker, content: line.content })),
-            voice_names: voiceNames,
-            style: deliveryStyle,
-            save_to_disk: true,
-            topic: topic.trim() || undefined,
-            format,
-            language,
-          }),
-        });
-      } else {
-        res = await fetch("/api/tts/realtime", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: abortCtrl.signal,
-          body: JSON.stringify({
-            text: script.map((line) => line.content).join("\n\n"),
-            speaker_name: voiceSelections[0] || "Carter",
-            style: deliveryStyle,
-            save_to_disk: true,
-            topic: topic.trim() || undefined,
-            format,
-            language,
-          }),
-        });
-      }
+      const res = await requestAudio(script, true, topic.trim(), abortCtrl.signal);
 
       if (!res.ok) throw new Error(await readError(res));
       const savedFilename = res.headers.get("X-Saved-Filename") ?? "";
@@ -431,6 +548,25 @@ export function useStudio() {
       ].filter(Boolean);
       setAudioStats(stats.join(" · "));
       setAudioStatusText("Audio generation complete");
+      if (extras?.chapters.length && savedFilename) {
+        try {
+          const chaptersUrl = `/outputs/${savedFilename.replace(/\.wav$/i, ".chapters.json")}`;
+          const chaptersResponse = await fetch(chaptersUrl);
+          if (chaptersResponse.ok && extrasRunId === extrasRunIdRef.current) {
+            const chapterData = await chaptersResponse.json();
+            if (extrasRunId !== extrasRunIdRef.current) return;
+            setExtras({
+              ...extras,
+              chapters: extras.chapters.map((chapter, index) => ({
+                ...chapter,
+                startTime: chapterData.chapters[index]?.startTime,
+              })),
+            });
+          }
+        } catch {
+          // The generated audio is still valid; planned chapters remain visible.
+        }
+      }
       loadHistory(historyLimit);
     } catch (error) {
       if (isAbortError(error)) {
@@ -467,6 +603,7 @@ export function useStudio() {
       language,
       duration_minutes: duration,
       delivery: deliveryStyle,
+      extras,
       script: script.map((line) => ({ speaker: line.speaker, content: line.content })),
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -478,7 +615,63 @@ export function useStudio() {
     URL.revokeObjectURL(url);
   }
 
+  async function renderSocialClip(clip: SocialClip): Promise<{ url: string; filename: string }> {
+    if (!script) throw new Error("Load the source script first");
+    const normalizedScript = script.filter((line) => line.content.trim());
+    const turns = normalizedScript.slice(clip.start_turn, clip.end_turn + 1);
+    if (!turns.length) throw new Error("The selected clip has no script turns");
+    const res = await requestAudio(turns, false, `${topic.trim()} - ${clip.title}`);
+    if (!res.ok) throw new Error(await readError(res));
+    const blob = await res.blob();
+    const safeName = clip.title.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "").toLowerCase() || "clip";
+    return { url: URL.createObjectURL(blob), filename: `${safeName}.wav` };
+  }
+
   // ---- Library actions ----
+  async function loadEpisodeForRerender(item: HistoryItem): Promise<boolean> {
+    try {
+      const stem = item.filename.replace(/\.wav$/i, "");
+      const res = await fetch(`/outputs/${encodeURIComponent(stem)}.transcript.json`);
+      if (!res.ok) throw new Error(await readError(res));
+      const data = await res.json();
+      if (!Array.isArray(data.script) || data.script.length === 0) {
+        throw new Error("The saved transcript has no script turns");
+      }
+      const loadedScript: ScriptLine[] = data.script.map((line: ScriptLine) => ({
+        speaker: String(line.speaker),
+        content: String(line.content),
+      })).filter((line: ScriptLine) => line.content.trim());
+      if (!loadedScript.length) throw new Error("The saved transcript has no spoken turns");
+      extrasRunIdRef.current += 1;
+      setIsGeneratingExtras(false);
+      const names: string[] = [];
+      for (const line of loadedScript) {
+        if (!names.includes(line.speaker)) names.push(line.speaker);
+      }
+      setTopic(data.topic || item.topic || item.title || "");
+      setDuration(DURATIONS.includes(data.duration_minutes) ? data.duration_minutes : 2);
+      setFormat(["monologue", "interview", "panel"].includes(data.format) ? data.format : (item.format as Format) || "monologue");
+      setLanguage((data.language || item.language || "en") as Language);
+      setSpeakerNames([names[0] || "Host", names[1] || "Guest", names[2] || "Guest 2"]);
+      setVoiceSelections(data.voice_names?.length ? data.voice_names : data.speaker_name ? [data.speaker_name] : []);
+      setEpisodeEngine(["vibevoice", "kokoro", "qwen3-tts", "chatterbox"].includes(data.engine) ? data.engine : "vibevoice");
+      setScript(loadedScript);
+      setExtras(data.extras || item.extras || null);
+      setExtrasError(null);
+      setEditedLines({});
+      setHasEdits(false);
+      setScriptStats(`${loadedScript.reduce((sum, line) => sum + countWords(line.content), 0)} words · loaded from Library`);
+      setAudioUrl(`/outputs/${encodeURIComponent(item.filename)}`);
+      setAudioFilename(item.filename);
+      setAudioError(null);
+      setAudioStatusText("Saved episode loaded; change cast or delivery and render again");
+      return true;
+    } catch (error) {
+      setHistoryError(`Could not load transcript: ${errorMessage(error)}`);
+      return false;
+    }
+  }
+
   async function renameFile(oldFilename: string, newFilename: string) {
     try {
       const res = await fetch("/api/podcast/rename", {
@@ -524,34 +717,80 @@ export function useStudio() {
   }
 
   // ---- Voice Lab actions ----
-  async function auditionVoice(voice: string): Promise<void> {
-    const res = await fetch("/api/tts/realtime", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text: "Hi, this is what I sound like when I host your show.",
-        speaker_name: voice,
-        save_to_disk: false,
-      }),
-    });
+  async function auditionVoice(voice: string, speaker?: string): Promise<{ url: string; filename: string }> {
+    const scriptLine = speaker ? script?.find((line) => line.speaker === speaker) : undefined;
+    const rawText = scriptLine?.content || `Hi, this is ${speaker || "your host"}. This is my delivery for the show.`;
+    const firstSentence = rawText.match(/^[\s\S]{1,240}?[.!?](?:\s|$)/)?.[0];
+    const text = (firstSentence || rawText).slice(0, 240).trim();
+    let res: Response;
+    if (isIndic) {
+      res = await fetch(audioEndpoint("/tts/sarvam"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text,
+          target_language_code: language,
+          speaker: voice,
+          output_audio_codec: "wav",
+          style: deliveryStyle,
+          save_to_disk: false,
+        }),
+      });
+    } else if (usesVibeVoice && usesLongform) {
+      res = await fetch(audioEndpoint("/tts/longform"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          script: [{ speaker: speaker || "Host", content: text }],
+          voice_names: [voice],
+          engine: "vibevoice",
+          style: deliveryStyle,
+          save_to_disk: false,
+        }),
+      });
+    } else if (usesVibeVoice) {
+      res = await fetch(audioEndpoint("/tts/realtime"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, speaker_name: voice, style: deliveryStyle, save_to_disk: false }),
+      });
+    } else {
+      res = await fetch(audioEndpoint("/tts/engine"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text,
+          engine: episodeEngine,
+          voice,
+          language,
+          style: deliveryStyle,
+          save_to_disk: false,
+        }),
+      });
+    }
     if (!res.ok) throw new Error(await readError(res));
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    new Audio(url).play();
+    return {
+      url: URL.createObjectURL(await res.blob()),
+      filename: `${(speaker || "voice").replace(/[^a-z0-9]+/gi, "_").toLowerCase()}_preview.wav`,
+    };
   }
 
   async function engineSpeak(input: {
     text: string;
     engine: string;
     voice?: string;
+    language?: string;
+    style?: DeliveryStyle;
   }): Promise<{ url: string; filename: string }> {
-    const res = await fetch("/api/tts/engine", {
+    const res = await fetch(audioEndpoint("/tts/engine"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         text: input.text,
         engine: input.engine,
         voice: input.voice,
+        language: input.language ?? "en",
+        style: input.style ?? "neutral",
         save_to_disk: false,
       }),
     });
@@ -567,6 +806,8 @@ export function useStudio() {
     text: string;
     engine: string;
     reference: File;
+    referenceText?: string;
+    language?: string;
     consent: boolean;
   }): Promise<{ url: string; filename: string }> {
     const form = new FormData();
@@ -574,9 +815,12 @@ export function useStudio() {
     form.append("engine", input.engine);
     form.append("consent", String(input.consent));
     form.append("reference", input.reference);
-    const res = await fetch("/api/tts/clone", { method: "POST", body: form });
+    form.append("reference_text", input.referenceText ?? "");
+    form.append("language", input.language ?? "en");
+    const res = await fetch(audioEndpoint("/tts/clone"), { method: "POST", body: form });
     if (!res.ok) throw new Error(await readError(res));
     const blob = await res.blob();
+    await fetchVoices();
     return {
       url: URL.createObjectURL(blob),
       filename: res.headers.get("X-Saved-Filename") ?? "cloned_voice.wav",
@@ -590,8 +834,12 @@ export function useStudio() {
     format, setFormat,
     language, setLanguage,
     speakerNames, setSpeakerNames,
+    renameSpeaker,
     voiceSelections, setVoiceSelections,
     deliveryStyle, setDeliveryStyle,
+    episodeEngine, setEpisodeEngine,
+    usesVibeVoice,
+    selectedEngineInfo,
     durations: DURATIONS,
     speakers,
     isIndic,
@@ -610,6 +858,10 @@ export function useStudio() {
     scriptWordCount,
     isGeneratingScript,
     scriptError, setScriptError,
+    extras,
+    extrasError, setExtrasError,
+    isGeneratingExtras,
+    generateExtras,
     editedLines,
     hasEdits,
     generateScript,
@@ -629,12 +881,14 @@ export function useStudio() {
     cancelAudio,
     playEpisode,
     downloadTranscript,
+    renderSocialClip,
     // library
     history,
     filteredHistory,
     historyError, setHistoryError,
     historySearch, setHistorySearch,
     historyLimit,
+    loadEpisodeForRerender,
     pendingDelete, setPendingDelete,
     renamingFile, setRenamingFile,
     renameValue, setRenameValue,

@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from script_pipeline import (  # noqa: E402
     build_units,
+    chunk_units_for_engine,
     group_units,
     list_voices,
     normalize_turns,
@@ -23,6 +24,7 @@ from script_pipeline import (  # noqa: E402
     resolve_voices,
     segment_gap_seconds,
     speaker_order,
+    split_monologue_turns,
     split_units,
     strip_directives,
     units_to_script_lines,
@@ -142,6 +144,31 @@ class UnitsAndChunkingTest(unittest.TestCase):
         for segment in segments:
             for unit in segment:
                 self.assertIn(unit["text"], ("One two three.", "Four five six."))
+
+    def test_monologue_is_split_without_changing_words(self):
+        text = "One two three. Four five six. Seven eight nine. Ten eleven twelve."
+        turns = split_monologue_turns(text, target_words=7)
+        self.assertEqual([len(turn["content"].split()) for turn in turns], [6, 6])
+        self.assertEqual(" ".join(turn["content"] for turn in turns), text)
+
+    def test_small_engine_chunks_long_sentences_without_losing_pause(self):
+        turns = normalize_turns([
+            {"speaker": "Host", "content": "one two three four five six seven eight nine ten [[pause:0.7]]"}
+        ])
+        chunks = chunk_units_for_engine(build_units(turns), max_words=4)
+        self.assertEqual([len(chunk["text"].split()) for chunk in chunks], [4, 4, 2])
+        self.assertEqual([chunk["pause_after"] for chunk in chunks], [0.0, 0.0, 0.7])
+        self.assertTrue(all(chunk["turn_index"] == 0 for chunk in chunks))
+
+    def test_chapter_turn_forces_a_new_segment(self):
+        turns = normalize_turns([
+            {"speaker": "Host", "content": "Opening turn."},
+            {"speaker": "Guest", "content": "Guest answer."},
+        ])
+        grouped = group_units(build_units(turns), break_before_turns={1})
+        segments = plan_generation(grouped, max_words=50, break_before_turns={1})
+        self.assertEqual(len(segments), 2)
+        self.assertEqual(segments[1][0]["turn_index"], 1)
 
     def test_script_lines_use_the_global_speaker_number(self):
         grouped = group_units(build_units(self.turns))
