@@ -17,8 +17,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from script_pipeline import (  # noqa: E402
     build_units,
     chunk_units_for_engine,
+    ensure_complete_ending,
     group_units,
+    has_signoff,
     list_voices,
+    looks_truncated,
     normalize_turns,
     plan_generation,
     resolve_voices,
@@ -27,6 +30,7 @@ from script_pipeline import (  # noqa: E402
     split_monologue_turns,
     split_units,
     strip_directives,
+    trim_to_last_complete_sentence,
     units_to_script_lines,
 )
 
@@ -223,6 +227,114 @@ class VoiceResolutionTest(unittest.TestCase):
         assignment, warnings = resolve_voices(["Host"], [])
         self.assertEqual(assignment, {})
         self.assertTrue(warnings)
+
+
+class TestEndingIntegrity(unittest.TestCase):
+    """The episode must never end on a fragment.
+
+    A script cut off by the provider's token budget used to be rendered as-is,
+    so every episode ended mid-sentence and the audio stopped abruptly.
+    """
+
+    # The real text that produced the defect, cut off by the token budget.
+    CUT_OFF = (
+        "Good morning, listeners. Today we're untangling a habit that most of us "
+        "just roll with twice a year. So, Europe's daylight-saving time started as "
+        "a wartime fuel-saving trick, evolved through energy crises, and now sits "
+        "at the crossroads of economics, health"
+    )
+
+    def test_cut_off_text_is_detected(self):
+        self.assertTrue(looks_truncated(self.CUT_OFF))
+
+    def test_complete_text_is_not_flagged(self):
+        self.assertFalse(
+            looks_truncated("That is all for today. Thanks for listening.")
+        )
+
+    def test_signoff_is_not_flagged(self):
+        self.assertFalse(looks_truncated("We will see you next time. Until next time!"))
+
+    def test_empty_text_is_flagged(self):
+        self.assertTrue(looks_truncated(""))
+        self.assertTrue(looks_truncated("   "))
+
+    def test_indic_text_is_judged_by_punctuation(self):
+        # No Latin letters, so the trailing word cannot be checked.
+        self.assertFalse(looks_truncated("এটি একটি সম্পূর্ণ বাক্য।"))
+        self.assertTrue(looks_truncated("এবং এটি অসম্পূর্ণ"))
+
+    def test_trim_drops_the_dangling_fragment(self):
+        trimmed = trim_to_last_complete_sentence("One. Two. And a dangling frag")
+        self.assertEqual(trimmed, "One. Two.")
+
+    def test_trim_keeps_a_closing_quote(self):
+        trimmed = trim_to_last_complete_sentence('He said "stop." And then')
+        self.assertTrue(trimmed.endswith('"'))
+
+    def test_ending_is_repaired_with_a_generated_closing(self):
+        calls = []
+
+        def fake_llm(messages, max_tokens=600, temperature=0.7):
+            calls.append(messages)
+            return "It remains a live debate. Thanks for listening."
+
+        script = [{"speaker": "Host", "content": self.CUT_OFF}]
+        fixed = ensure_complete_ending(script, "English", fake_llm)
+
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(looks_truncated(fixed[-1]["content"]))
+        self.assertTrue(has_signoff(fixed[-1]["content"]))
+
+    def test_ending_is_repaired_when_the_model_call_fails(self):
+        def broken_llm(messages, max_tokens=600, temperature=0.7):
+            raise RuntimeError("provider down")
+
+        script = [{"speaker": "Host", "content": self.CUT_OFF}]
+        fixed = ensure_complete_ending(script, "English", broken_llm)
+
+        self.assertFalse(looks_truncated(fixed[-1]["content"]))
+        self.assertTrue(has_signoff(fixed[-1]["content"]))
+
+    def test_ending_is_repaired_without_any_model(self):
+        script = [{"speaker": "Host", "content": self.CUT_OFF}]
+        fixed = ensure_complete_ending(script, "English", None)
+        self.assertFalse(looks_truncated(fixed[-1]["content"]))
+        self.assertTrue(has_signoff(fixed[-1]["content"]))
+
+    def test_an_existing_signoff_is_left_alone(self):
+        calls = []
+
+        def fake_llm(messages, max_tokens=600, temperature=0.7):
+            calls.append(messages)
+            return "Something else."
+
+        content = "That is all for today. Thanks for listening."
+        script = [{"speaker": "Host", "content": content}]
+        fixed = ensure_complete_ending(script, "English", fake_llm)
+
+        self.assertEqual(calls, [])
+        self.assertEqual(fixed[-1]["content"], content)
+
+    def test_a_truncated_generated_closing_is_trimmed(self):
+        def fake_llm(messages, max_tokens=600, temperature=0.7):
+            return "A closing that got cut off mid"
+
+        script = [{"speaker": "Host", "content": self.CUT_OFF}]
+        fixed = ensure_complete_ending(script, "English", fake_llm)
+        self.assertFalse(looks_truncated(fixed[-1]["content"]))
+
+    def test_multi_turn_script_only_repairs_the_last_turn(self):
+        script = [
+            {"speaker": "Host", "content": "Welcome to the show."},
+            {"speaker": "Guest", "content": self.CUT_OFF},
+        ]
+        fixed = ensure_complete_ending(script, "English", None)
+        self.assertEqual(fixed[0]["content"], "Welcome to the show.")
+        self.assertFalse(looks_truncated(fixed[-1]["content"]))
+
+    def test_empty_script_is_handled(self):
+        self.assertEqual(ensure_complete_ending([], "English", None), [])
 
 
 if __name__ == "__main__":

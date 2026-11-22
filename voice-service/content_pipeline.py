@@ -23,8 +23,62 @@ _REQUIRED_KEYS = (
     "chapters",
     "social_clips",
 )
-_MAX_TOKENS = 3000
+_MAX_TOKENS = 6000
 _TEMPERATURE = 0.2
+
+
+class TruncatedJSONError(ValueError):
+    """The response was cut short, so it is worth asking for a bigger budget.
+
+    A malformed response is the model's fault and must not be retried; a
+    truncated one is a budget problem and gets one more attempt.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+# JSON errors that mean "the response stopped early" rather than "the model
+# wrote something invalid".
+_TRUNCATION_SIGNATURES = (
+    "unterminated string",
+    "expecting ',' delimiter",
+    "expecting property name",
+    "unexpected end of",
+)
+
+
+def _is_truncated_json(text: str, error_message: str) -> bool:
+    """True when the JSON stopped early, rather than being malformed.
+
+    An error message alone is not enough: "Expecting value" appears both for a
+    cut-off response and for genuinely invalid JSON such as ``{title: oops}``.
+    Unbalanced braces are the reliable signal that the response was truncated.
+    """
+    if any(signature in error_message.lower() for signature in _TRUNCATION_SIGNATURES):
+        return True
+    # Count braces outside string literals, so a brace inside a quoted value
+    # does not skew the balance.
+    depth = 0
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+    return depth > 0
 
 
 def _extract_json_object(raw: Any) -> Dict[str, Any]:
@@ -57,12 +111,17 @@ def _extract_json_object(raw: Any) -> Dict[str, Any]:
                     return value
             start = text.find("{", start + 1)
 
-        raise ValueError(
+        message = (
             "LLM content extras response did not contain a complete valid JSON "
             f"object ({whole_error.msg} at line {whole_error.lineno}, column "
             f"{whole_error.colno}). Return the JSON object only, without Markdown "
             "fences or surrounding prose."
-        ) from whole_error
+        )
+        if _is_truncated_json(text, whole_error.msg):
+            # The response stopped early. That is a token-budget problem, so it
+            # earns one retry with a bigger budget.
+            raise TruncatedJSONError(message) from whole_error
+        raise ValueError(message) from whole_error
 
     if not isinstance(value, dict):
         raise ValueError(
@@ -365,12 +424,20 @@ def generate_content_extras(
         spoken_texts,
     )
 
-    # Deliberately no retry: a second provider call would make validation and
+    # A truncated JSON response is a budget problem, not a contract problem, so it
+    # gets one retry with a larger budget. A malformed response is the model's
+    # fault and is not retried: a second provider call would make validation and
     # provider usage nondeterministic for callers and tests.
     raw_response = llm_chat(
         messages, max_tokens=_MAX_TOKENS, temperature=_TEMPERATURE
     )
-    payload = _extract_json_object(raw_response)
+    try:
+        payload = _extract_json_object(raw_response)
+    except TruncatedJSONError:
+        raw_response = llm_chat(
+            messages, max_tokens=_MAX_TOKENS * 2, temperature=_TEMPERATURE
+        )
+        payload = _extract_json_object(raw_response)
 
     missing = [key for key in _REQUIRED_KEYS if key not in payload]
     if missing:

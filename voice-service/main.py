@@ -105,8 +105,11 @@ from script_pipeline import (
     DEFAULT_STYLE,
     build_units,
     chunk_units_for_engine,
+    ensure_complete_ending,
     group_units,
+    has_signoff,
     list_voices,
+    looks_truncated,
     normalize_turns,
     plan_generation,
     resolve_voices,
@@ -118,6 +121,7 @@ from script_pipeline import (
     style_cfg_multiplier,
     style_names,
     style_params,
+    trim_to_last_complete_sentence,
     turn_content,
     turn_speaker,
     units_to_script_lines,
@@ -352,12 +356,18 @@ def mask_key(key: str) -> str:
     return key[:4] + "..." + key[-4:]
 
 # ============== Duration Config ==============
+# max_tokens must comfortably exceed the words the script needs, because a
+# reasoning model spends part of its budget on hidden reasoning tokens and the
+# provider truncates the visible text when the cap is hit. Truncation used to
+# cut the sign-off off mid-sentence, and the audio faithfully rendered the
+# fragment, so every episode ended abruptly. The budget below leaves headroom;
+# _ensure_complete_ending() then repairs anything that still gets cut.
 DURATION_CONFIG = {
-    2: {"words": 300, "max_tokens": 800, "chapters": None, "label": "2 min"},
-    5: {"words": 750, "max_tokens": 1500, "chapters": None, "label": "5 min"},
-    10: {"words": 1500, "max_tokens": 2500, "chapters": None, "label": "10 min"},
-    15: {"words": 2250, "max_tokens": 3500, "chapters": 4, "label": "15 min"},
-    30: {"words": 4500, "max_tokens": 5500, "chapters": 6, "label": "30 min"},
+    2: {"words": 300, "max_tokens": 1600, "chapters": None, "label": "2 min"},
+    5: {"words": 750, "max_tokens": 3200, "chapters": None, "label": "5 min"},
+    10: {"words": 1500, "max_tokens": 6000, "chapters": None, "label": "10 min"},
+    15: {"words": 2250, "max_tokens": 8500, "chapters": 4, "label": "15 min"},
+    30: {"words": 4500, "max_tokens": 16000, "chapters": 6, "label": "30 min"},
 }
 
 # ============== Pydantic Models ==============
@@ -401,14 +411,17 @@ LANGUAGE_MAP = {
     "od-IN": "Odia",
 }
 
-# Sarvam uses ISO 639-1 language codes, the app uses ISO 639-3 for a few languages.
+# Sarvam accepts these language codes. The app uses "od-IN" for Odia, which is
+# the code Sarvam itself expects, so no translation is needed for it. The earlier
+# mapping to "or-IN" was rejected by the API with a validation error, which made
+# every Odia episode fail.
 SARVAM_LANGUAGE_CODES = {
-    "od-IN": "or-IN",
+    "od-IN": "od-IN",
 }
 SARVAM_DEFAULT_VOICES = ["shubh", "shreya", "manan"]
 
 class PodcastGenerateRequest(BaseModel):
-    topic: str
+    topic: str = Field(..., min_length=1)
     duration_minutes: int = Field(default=2, ge=2, le=30)
     format: str = Field(default="monologue", pattern="^(monologue|interview|panel)$")
     speakers: Optional[List[str]] = Field(default=None, max_length=3)
@@ -814,7 +827,16 @@ def groq_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperature
                 timeout=25,
             )
             resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
+            content = (resp.json()["choices"][0]["message"].get("content") or "").strip()
+            if content:
+                return content
+            # A reasoning model can spend the whole budget on hidden reasoning and
+            # return nothing. Retry once with a bigger budget before giving up.
+            if attempt == 0:
+                print("Groq returned an empty response; retrying with a larger budget.")
+                max_tokens = max(max_tokens * 3, 2000)
+                continue
+            return ""
         except Exception as e:
             last_exception = e
             status = getattr(getattr(e, "response", None), "status_code", 0)
@@ -839,43 +861,87 @@ def groq_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperature
         raise HTTPException(status_code=429, detail=f"Groq API rate-limited after retries: {last_exception}")
     raise HTTPException(status_code=503, detail=f"Groq API unavailable after retries: {last_exception}")
 
+def _openai_compatible_chat(
+    url: str,
+    api_key: str,
+    model: str,
+    messages: List[Dict[str, str]],
+    max_tokens: int,
+    temperature: float,
+    timeout: int = 25,
+    label: str = "",
+) -> str:
+    """Call an OpenAI-compatible chat endpoint, tolerating reasoning models.
+
+    Groq's ``openai/gpt-oss-120b`` and DeepSeek's ``deepseek-v4-flash`` are
+    reasoning models: part of their token budget goes to hidden reasoning, and
+    when reasoning exhausts the budget the visible content comes back empty.
+    That is a budget problem, not a provider outage, so the call is retried
+    with a larger budget before it is reported as a failure.
+
+    Returns an empty string only when the provider genuinely produced nothing;
+    the caller decides what to do with that.
+    """
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    budget = max_tokens
+    for attempt in range(2):
+        resp = requests.post(
+            url,
+            headers=headers,
+            json={
+                "model": model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": budget,
+            },
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        message = resp.json()["choices"][0]["message"]
+        content = (message.get("content") or "").strip()
+        if content:
+            return content
+        if attempt == 0:
+            # Give the hidden reasoning tokens room to finish.
+            budget = max(budget * 3, 2000)
+            print(
+                f"[{label}] empty response; retrying with a budget of {budget} tokens."
+            )
+    return ""
+
+
 def deepseek_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperature: float = 0.7) -> str:
     """Call DeepSeek API (OpenAI-compatible)."""
     api_key = get_api_key("DEEPSEEK_API_KEY")
     if not api_key:
         raise HTTPException(status_code=503, detail="DEEPSEEK_API_KEY not configured")
-    resp = requests.post(
+    return _openai_compatible_chat(
         "https://api.deepseek.com/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={
-            "model": _model_id("DEEPSEEK_MODEL", "deepseek-v4-flash"),
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        },
-        timeout=25,
+        api_key,
+        _model_id("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+        messages,
+        max_tokens,
+        temperature,
+        label="DeepSeek",
     )
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"].strip()
 
 def gemini_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperature: float = 0.7) -> str:
     """Call Google Gemini as fallback (OpenAI-compatible endpoint)."""
     api_key = get_api_key("GEMINI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=503, detail="GEMINI_API_KEY not configured")
-    resp = requests.post(
+    return _openai_compatible_chat(
         "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={
-            "model": _model_id("GEMINI_MODEL", "gemini-2.5-flash"),
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        },
-        timeout=25,
+        api_key,
+        _model_id("GEMINI_MODEL", "gemini-2.5-flash"),
+        messages,
+        max_tokens,
+        temperature,
+        label="Gemini",
     )
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"].strip()
 
 def mistral_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperature: float = 0.7) -> str:
     """Call Mistral AI API."""
@@ -1020,7 +1086,14 @@ def dialogram_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temper
     return resp.json()["choices"][0]["message"]["content"].strip()
 
 def llm_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperature: float = 0.7) -> str:
-    """Try providers in order of likelihood to work based on current env."""
+    """Try providers in order of likelihood to work based on current env.
+
+    A provider that answers with nothing is a failure, not a success. Reasoning
+    models such as Groq's ``openai/gpt-oss-120b`` can spend their whole token
+    budget on hidden reasoning and return an empty ``content``, which used to be
+    returned as the script. An empty response now falls through to the next
+    provider instead of producing a zero-word episode.
+    """
     errors = []
     providers = [
         ("Dialogram", dialogram_chat),
@@ -1036,7 +1109,14 @@ def llm_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperature:
         try:
             if i > 0:
                 print(f"[llm fallback] {providers[i-1][0]} failed, trying {name}...")
-            return fn(messages, max_tokens=max_tokens, temperature=temperature)
+            text = fn(messages, max_tokens=max_tokens, temperature=temperature)
+            if not (text or "").strip():
+                # The provider answered with nothing. Treat it as a failure so the
+                # next provider gets a turn.
+                errors.append(f"{name}: returned an empty response")
+                logger.warning("%s returned an empty response; trying the next provider.", name)
+                continue
+            return text
         except (requests.RequestException, HTTPException, KeyError, IndexError, ValueError) as e:
             # Only provider failures belong in the fallback chain. A TypeError in our
             # own code must surface as a 500, not as eight "provider" failures.
@@ -1116,6 +1196,7 @@ def parse_conversation_script(raw_text: str, speakers: List[str]) -> List[Dict[s
     if dropped_lines:
         logger.warning("Dropped %d line(s) from unknown speakers", dropped_lines)
     return script
+
 
 def build_speaker_list(format_type: str, speakers: Optional[List[str]]) -> List[str]:
     defaults = {
@@ -1738,7 +1819,34 @@ async def tts_with_engine(req: EngineTTSRequest):
     loop = asyncio.get_event_loop()
     reference_path = None
     reference_text = None
-    if req.voice and req.engine in ("qwen3-tts", "chatterbox"):
+    if req.engine in ("qwen3-tts", "chatterbox"):
+        available = [
+            voice["id"]
+            for voice in _consented_references(req.engine)
+        ]
+        # Qwen3-TTS ships preset voices that need no reference audio. Only
+        # Chatterbox is clone-only.
+        presets = set(get_engine(req.engine).default_voices or []) if req.engine == "qwen3-tts" else set()
+        is_preset = bool(req.voice) and req.voice in presets
+        if not req.voice and not is_preset:
+            # A cloning engine needs reference audio. Without it the model
+            # fails deep inside with an error about a missing conditions file.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{req.engine} needs a voice. "
+                    + (
+                        f"Preset voices: {', '.join(sorted(presets))}. "
+                        if presets
+                        else ""
+                    )
+                    + (
+                        f"Cloned voices: {', '.join(available)}."
+                        if available
+                        else "No consented voices exist yet. Clone one in the Voice Lab first."
+                    )
+                ),
+            )
         reference = next(
             (voice for voice in _consented_references(req.engine) if voice["id"] == req.voice),
             None,
@@ -1746,6 +1854,19 @@ async def tts_with_engine(req: EngineTTSRequest):
         if reference:
             reference_path = reference["path"]
             reference_text = reference["reference_text"]
+        elif not is_preset:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Voice '{req.voice}' is not a consented {req.engine} reference. "
+                    + (
+                        f"Available voices: {', '.join(available)}."
+                        if available
+                        else f"No consented {req.engine} voices exist yet. "
+                        "Clone one in the Voice Lab first."
+                    )
+                ),
+            )
     try:
         audio_bytes = await loop.run_in_executor(
             _tts_executor,
@@ -2272,6 +2393,18 @@ async def tts_sarvam(req: SarvamTTSRequest):
     
     fallback_triggered = False
     try:
+        # An unsupported language code is a client error. Falling back to
+        # VibeVoice and returning 503 for it hides a typo behind a server fault.
+        supported = {"bn-IN", "en-IN", "gu-IN", "hi-IN", "kn-IN", "ml-IN",
+                     "mr-IN", "od-IN", "pa-IN", "ta-IN", "te-IN"}
+        if req.target_language_code not in supported:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Sarvam does not support '{req.target_language_code}'. "
+                    f"Supported: {', '.join(sorted(supported))}."
+                ),
+            )
         turns = normalize_turns(req.script) if req.script is not None else []
         if req.script is not None and not turns:
             raise HTTPException(status_code=400, detail="script is empty")
@@ -2624,9 +2757,15 @@ Now write the complete script."""
                 script = [{"speaker": speakers[0], "content": raw_script}]
         
         word_count = sum(len(item["content"].split()) for item in script)
-        
+
         # Auto-expand if significantly under target (common for Indic LLM outputs)
         script, word_count = expand_script_if_needed(script, word_count)
+
+        # The last thing a listener hears must be a complete sentence. Repair a
+        # script that the provider cut off, before the monologue is split into
+        # turns, so the repair lands in the final turn rather than being spread.
+        script = ensure_complete_ending(script, lang_name, llm_chat)
+
         if req.format == "monologue":
             combined = "\n\n".join(turn["content"] for turn in script)
             script = split_monologue_turns(combined, speakers[0])

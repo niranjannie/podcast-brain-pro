@@ -203,6 +203,24 @@ class ContentExtrasTest(unittest.TestCase):
                     )
                 self.assertEqual(llm.call_count, 1)
 
+    def test_truncated_json_is_retried_with_a_larger_budget(self):
+        # A response cut off by the token budget earns one retry. A malformed
+        # response does not, which is what the test above pins down.
+        truncated = '{"title": "A title", "summary": "A summary that got cut off mid'
+        payload = make_payload()
+        calls = []
+
+        def llm(messages, max_tokens=600, temperature=0.7):
+            calls.append(max_tokens)
+            return truncated if len(calls) == 1 else json.dumps(payload)
+
+        result = generate_content_extras(
+            "A grounded topic", SCRIPT, 10, "English", 3, llm
+        )
+        self.assertEqual(len(calls), 2)
+        self.assertGreater(calls[1], calls[0])
+        self.assertEqual(result["title"], payload["title"])
+
     def test_required_fields_and_exact_text_list_counts_are_validated(self):
         missing = make_payload()
         del missing["summary"]

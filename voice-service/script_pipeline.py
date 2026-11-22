@@ -513,3 +513,142 @@ def voice_paths_by_id(
     """Turn a speaker -> voice id assignment into the ordered path list VibeVoice wants."""
     by_id = {voice["id"]: voice["path"] for voice in voices}
     return [by_id[voice_id] for voice_id in assignment.values()]
+
+
+# ============== Ending integrity ==============
+# A script cut off by the provider's token budget used to be rendered as-is, so
+# the episode stopped mid-sentence and the audio ended abruptly. These helpers
+# detect that and repair it.
+
+# Phrases that mean the episode already closed itself.
+SIGNOFF_MARKERS = (
+    "until next time", "see you next time", "that's all", "thats all",
+    "thanks for listening", "thank you for listening", "goodbye",
+    "stay safe", "see you soon", "tune in next", "subscribe",
+)
+
+# Words that cannot end a sentence: the text is dangling after them.
+DANGLING_ENDINGS = (
+    "and", "or", "but", "of", "in", "on", "at", "to", "for", "with",
+    "from", "by", "as", "the", "a", "an", "is", "are", "was", "were",
+    "that", "which", "who", "because", "about", "into", "over", "after",
+    "before", "between", "through", "however", "meanwhile", "actually",
+    "really", "very", "so", "then", "than", "when", "while", "health",
+    "economy", "economics", "future", "history", "science", "policy",
+)
+
+
+def has_signoff(text: str) -> bool:
+    """True when the text already contains a closing phrase."""
+    lowered = (text or "").lower()
+    return any(marker in lowered for marker in SIGNOFF_MARKERS)
+
+
+def looks_truncated(text: str) -> bool:
+    """True when the text stops mid-sentence, so the ending is not a real ending."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return True
+    if has_signoff(stripped):
+        return False
+    words = re.split(r"[^A-Za-z']+", stripped.lower())
+    words = [w for w in words if w]
+    if not words:
+        # No Latin characters at all: an Indic script. Judge it by punctuation.
+        return not stripped.endswith((".", "!", "?", "।", '"', "”", "’", "'", "…"))
+    if words[-1] in DANGLING_ENDINGS:
+        return True
+    return not stripped.endswith((".", "!", "?", "।", '"', "”", "’", "'", "…"))
+
+
+def trim_to_last_complete_sentence(text: str) -> str:
+    """Drop a trailing fragment so the audio never ends mid-word."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return ""
+    ends = [m.end() for m in re.finditer(r"[.!?…।]([\"”'])?(?=\s|$)", stripped)]
+    if not ends:
+        return ""
+    cut = ends[-1]
+    tail = stripped[cut:]
+    if tail.startswith('"') or tail.startswith("”"):
+        cut += 1
+    return stripped[:cut].strip()
+
+
+def ensure_complete_ending(
+    script: List[Dict[str, str]],
+    lang_name: str = "English",
+    llm_chat: Optional[Any] = None,
+) -> List[Dict[str, str]]:
+    """Make sure the last spoken line ends properly.
+
+    A script cut off by the provider's token budget used to be rendered as-is,
+    so the episode stopped mid-sentence. The repair has two independent parts:
+
+    1. If the text stops mid-sentence, drop the dangling fragment.
+    2. If the episode has no sign-off, ask the model to write one, so the
+       listener hears a finished episode rather than a body of text that
+       simply stops.
+
+    Part 2 runs even when part 1 succeeded, because trimming a fragment leaves
+    complete but sign-off-free text.
+
+    ``llm_chat`` is injected rather than imported, so this stays testable and
+    this module stays free of provider dependencies.
+    """
+    if not script:
+        return script
+
+    last = script[-1]
+    content = (last.get("content") or "").strip()
+    if not content:
+        return script
+
+    if looks_truncated(content):
+        trimmed = trim_to_last_complete_sentence(content)
+        if trimmed and trimmed != content:
+            content = trimmed
+            last["content"] = content
+
+    if has_signoff(content):
+        return script
+
+    closing = ""
+    if llm_chat is not None:
+        try:
+            closing = llm_chat(
+                [
+                    {"role": "system", "content": "You write the closing lines of a podcast script."},
+                    {
+                        "role": "user",
+                        "content": (
+                            "Write ONLY a short closing passage (2 to 4 sentences) that signs "
+                            "this podcast episode off. It must not repeat what was already "
+                            "said, must not add a speaker name, and must not mention that the "
+                            "text was cut off. Write it in "
+                            f"{lang_name} only.\n\n"
+                            f"THE EPISODE SO FAR ENDS WITH:\n{content[-1500:]}"
+                        ),
+                    },
+                ],
+                max_tokens=400,
+                temperature=0.5,
+            ).strip()
+        except Exception:
+            closing = ""
+
+    if closing and looks_truncated(closing):
+        closing = trim_to_last_complete_sentence(closing)
+
+    if closing:
+        last["content"] = (content + " " + closing).strip()
+    else:
+        # No model available to close it. Say it plainly rather than ending on a
+        # fragment, so the listener hears a complete episode.
+        last["content"] = (
+            content + " That is all for this episode. Thanks for listening."
+        ).strip()
+
+    return script
+
