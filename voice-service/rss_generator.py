@@ -5,6 +5,8 @@ from urllib.parse import quote
 from xml.sax.saxutils import escape
 from typing import Dict, Any
 
+from script_pipeline import DISCLOSURE_SHORT
+
 # The pipeline writes 24 kHz mono 16-bit WAV, i.e. 48000 bytes per second. The old
 # estimate assumed 44.1 kHz stereo and produced durations about 3.7x too long.
 WAV_BYTES_PER_SECOND = 48000
@@ -69,6 +71,12 @@ def generate_podcast_rss(
 
         title = metadata.get("title") or metadata.get("topic") or f["filename"].replace(".wav", "").replace("_", " ")
         description = metadata.get("description") or f"Generated podcast episode: {title}"
+        # EU AI Act Article 50: synthetic audio must be machine-readably marked as
+        # such. The spoken disclosure is already in the audio; this makes it
+        # visible in the feed too, so a listener can see it before playing.
+        disclosure = metadata.get("disclosure")
+        if disclosure:
+            description = f"{description}\n\n{disclosure}"
         # UTC, and labelled as UTC. Local time with a +0000 suffix made episodes look
         # like they were published in the future.
         pub_date = f["created_at"].strftime("%a, %d %b %Y %H:%M:%S +0000")
@@ -131,6 +139,14 @@ def generate_podcast_rss(
             f"<itunes:name>{escape(channel_author)}</itunes:name></itunes:owner>"
         )
 
+    # EU AI Act Article 50: the feed itself must say that the audio is synthetic.
+    # Every episode also carries a spoken disclosure, and each episode's
+    # description repeats it, so the marking is visible in three places.
+    channel_description = (
+        f"{channel_description}\n\n{DISCLOSURE_SHORT}"
+    )
+    disclosure_xml = f"\n    <podcast:disclosure>{escape(DISCLOSURE_SHORT)}</podcast:disclosure>"
+
     rss = f"""<?xml version="1.0" encoding="UTF-8"?>
 <rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:podcast="https://podcastindex.org/namespace/1.0" xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
   <channel>
@@ -140,7 +156,7 @@ def generate_podcast_rss(
     <language>{escape(channel_language)}</language>
     <itunes:author>{escape(channel_author)}</itunes:author>
     <itunes:category text="{escape(channel_category)}"/>
-    <itunes:explicit>{'true' if explicit else 'false'}</itunes:explicit>{image_xml}{owner_xml}
+    <itunes:explicit>{'true' if explicit else 'false'}</itunes:explicit>{image_xml}{owner_xml}{disclosure_xml}
     <link>{escape(base_url)}</link>
     <atom:link href="{escape(feed_url)}" rel="self" type="application/rss+xml"/>
     <lastBuildDate>{last_build}</lastBuildDate>{items_xml}

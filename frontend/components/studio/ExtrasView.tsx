@@ -173,6 +173,10 @@ export function ExtrasView({ studio }: { studio: Studio }) {
                     {result && (
                       <div className="space-y-2">
                         <audio controls className="w-full h-9" src={result.url} />
+                        <p className="text-[10px] text-muted leading-relaxed">
+                          Rendered with the lightweight engine, so the voice differs from the
+                          episode.
+                        </p>
                         <Button variant="ghost" size="sm" asChild>
                           <a href={result.url} download={result.filename}>
                             <Download className="w-3.5 h-3.5" /> Download clip

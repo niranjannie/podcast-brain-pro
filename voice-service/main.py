@@ -103,8 +103,11 @@ from content_pipeline import generate_content_extras, with_chapter_timing
 from engines import EngineUnavailable, get_engine, list_engines, synthesize
 from script_pipeline import (
     DEFAULT_STYLE,
+    DISCLOSURE_SHORT,
+    add_disclosure,
     build_units,
     chunk_units_for_engine,
+    disclosure_line,
     ensure_complete_ending,
     group_units,
     has_signoff,
@@ -619,6 +622,16 @@ EXPAND_SHORT_SCRIPTS = os.environ.get("EXPAND_SHORT_SCRIPTS", "false").strip().l
     "on",
 )
 
+# Speak an AI disclosure at the start of every episode. EU AI Act Article 50
+# requires it for synthetic audio from 2 August 2026. On by default; the switch
+# exists for local experiments, not for production.
+AI_DISCLOSURE = os.environ.get("AI_DISCLOSURE", "true").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+
 def _finalize_audio(audio_bytes: bytes, metadata: Optional[Dict[str, Any]] = None) -> bytes:
     """Normalise loudness for podcast delivery and record the measurement.
 
@@ -819,7 +832,7 @@ def groq_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperature
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": _model_id("GROQ_MODEL", "openai/gpt-oss-120b"),
+                    "model": _model_id("GROQ_MODEL", "openai/gpt-oss-20b"),
                     "messages": messages,
                     "temperature": temperature,
                     "max_tokens": max_tokens,
@@ -1621,6 +1634,14 @@ def _do_tts_realtime_sync(text: str, speaker_name: Optional[str], cfg_scale: Opt
     speaker_name = speaker_name or "Carter"
     cfg_scale = cfg_scale if cfg_scale is not None else 1.5
 
+    # A saved episode carries the audible AI disclosure even if the script was
+    # edited to remove it. A preview (save_to_disk=False) does not: auditioning a
+    # voice should not open with a legal notice.
+    if save_to_disk and AI_DISCLOSURE:
+        line = disclosure_line(language or "en")
+        if not (text or "").strip().lower().startswith(line[:40].lower()):
+            text = f"{line} {(text or '').strip()}".strip()
+
     voices = [voice for voice in list_voices(VOICES_DIR) if voice["ext"] == "pt"]
     if not voices:
         raise HTTPException(status_code=500, detail="No voice presets found")
@@ -1705,6 +1726,8 @@ def _do_tts_realtime_sync(text: str, speaker_name: Optional[str], cfg_scale: Opt
     if save_to_disk:
         word_count = len(text.split())
         meta = {"word_count": word_count, "speaker_name": speaker_name, "voice_names": [voice_id], "format": format, "language": language, "duration_minutes": duration_minutes, "engine": "vibevoice"}
+        if save_to_disk and AI_DISCLOSURE:
+            meta["disclosure"] = DISCLOSURE_SHORT
         if extras:
             chapters = extras.get("chapters") or []
             if chapters:
@@ -2225,6 +2248,11 @@ def _do_tts_longform_sync(
     chapter_turns = {
         chapter["start_turn"] for chapter in (req.extras or {}).get("chapters", [])
     }
+    # A saved episode carries the audible AI disclosure even if the script was
+    # edited to remove it. The disclosure does not add a turn, so the chapter
+    # turn indexes stay valid.
+    if req.save_to_disk and AI_DISCLOSURE:
+        turns = add_disclosure(turns, req.language or "en", enabled=True)
     grouped = group_units(
         build_units(turns, default_style=req.style or DEFAULT_STYLE),
         break_before_turns=chapter_turns,
@@ -2321,6 +2349,8 @@ async def tts_longform(req: TTSLongformRequest):
             "chunks": chunks_used,
             "device": DEVICE,
         }
+        if req.save_to_disk and AI_DISCLOSURE:
+            meta["disclosure"] = DISCLOSURE_SHORT
         if req.extras:
             meta["extras"] = (
                 with_chapter_timing(req.extras, chapter_starts)
@@ -2441,6 +2471,11 @@ async def tts_sarvam(req: SarvamTTSRequest):
         turns = normalize_turns(req.script) if req.script is not None else []
         if req.script is not None and not turns:
             raise HTTPException(status_code=400, detail="script is empty")
+        # A saved episode carries the audible AI disclosure even if the script was
+        # edited to remove it. The disclosure does not add a turn, so the chapter
+        # turn indexes stay valid.
+        if req.save_to_disk and AI_DISCLOSURE and turns:
+            turns = add_disclosure(turns, req.language or "en", enabled=True)
         speakers = speaker_order(turns)
         voice_map: Dict[str, str] = {}
         for index, speaker in enumerate(speakers):
@@ -2590,6 +2625,8 @@ async def tts_sarvam(req: SarvamTTSRequest):
             "chunks": len(chunks),
             "format": req.format or "monologue",
         }
+        if req.save_to_disk and AI_DISCLOSURE:
+            meta["disclosure"] = DISCLOSURE_SHORT
         if req.extras:
             meta["extras"] = (
                 with_chapter_timing(req.extras, chapter_starts)
@@ -2830,6 +2867,12 @@ Now write the complete script."""
             combined = "\n\n".join(turn["content"] for turn in script)
             script = split_monologue_turns(combined, speakers[0])
             word_count = sum(len(turn["content"].split()) for turn in script)
+
+        # Speak the AI disclosure at the start of the episode. It goes in after
+        # the monologue is split, so it lands in the first turn and is rendered
+        # with the rest of that turn's delivery.
+        script = add_disclosure(script, req.language, enabled=AI_DISCLOSURE)
+        word_count = sum(len(turn["content"].split()) for turn in script)
 
         extras = None
         extras_error = None

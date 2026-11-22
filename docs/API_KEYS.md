@@ -5,7 +5,7 @@ Podcast Brain Pro uses a **fallback chain** for script generation. If the primar
 ## Current Fallback Order
 
 1. **Dialogram** (`qwen-3.6-plus`) — recommended primary
-2. **Groq** (`openai/gpt-oss-120b`) — very fast, rate-limited
+2. **Groq** (`openai/gpt-oss-20b`) — very fast, generous free-tier rate limit
 3. **DeepSeek** (`deepseek-v4-flash`)
 4. **Ollama** (local, no key needed)
 5. **Gemini** (`gemini-2.5-flash`)
@@ -17,7 +17,7 @@ Providers retire model ids. Every id below can be overridden with an environment
 variable, so a retirement is a one line change:
 
 ```bash
-GROQ_MODEL=openai/gpt-oss-120b
+GROQ_MODEL=openai/gpt-oss-20b
 DEEPSEEK_MODEL=deepseek-v4-flash
 GEMINI_MODEL=gemini-2.5-flash
 MISTRAL_MODEL=mistral-small-latest
@@ -31,7 +31,7 @@ OPENROUTER_MODEL=some/model:free
 | Provider | Status | What to use instead |
 |---|---|---|
 | GitHub Models (`models.inference.ai.azure.com`) | Inference API retired, 30 Jul 2026 | Any remaining provider in the chain |
-| Groq `llama-3.3-70b-versatile` | Model shut down, 16 Aug 2026 | `openai/gpt-oss-120b` or `qwen/qwen3.8-27b` |
+| Groq `llama-3.3-70b-versatile` | Model shut down, 16 Aug 2026 | `openai/gpt-oss-20b` (default) or `openai/gpt-oss-120b` |
 | Gemini `gemini-2.0-flash` | Model retired, 1 Jun 2026 | `gemini-2.5-flash` or `gemini-3-flash` |
 | DeepSeek `deepseek-chat` | Legacy alias discontinued, 24 Jul 2026 | `deepseek-v4-flash` |
 | OpenRouter `mistralai/mistral-7b-instruct:free` | No provider left for that id | Any `:free` id, or set `OPENROUTER_MODEL` |
@@ -46,8 +46,9 @@ OPENROUTER_MODEL=some/model:free
   convenience, not a guarantee, and keep a second provider key configured.
 
 ### Groq
-- **Model:** `openai/gpt-oss-120b`
-- **Why:** Blazing fast inference, 131k context
+- **Model:** `openai/gpt-oss-20b`
+- **Why:** Blazing fast inference, 131k context, and the 20b model is small enough
+  to stay well inside the free-tier rate limit
 - **Caveat:** Daily rate limits can be exhausted quickly
 - **Get key:** https://console.groq.com/keys
 

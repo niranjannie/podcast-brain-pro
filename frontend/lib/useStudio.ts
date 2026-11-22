@@ -420,6 +420,7 @@ export function useStudio() {
     persist: boolean,
     requestTopic: string,
     signal?: AbortSignal,
+    fastEngine?: string,
   ): Promise<Response> {
     const normalizedTurns = turns.filter((line) => line.content.trim());
     const castOrder: string[] = [];
@@ -458,7 +459,7 @@ export function useStudio() {
       });
     }
 
-    if (usesLongform || !usesVibeVoice) {
+    if (usesLongform || !usesVibeVoice || fastEngine) {
       return fetch(audioEndpoint("/tts/longform"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -466,7 +467,7 @@ export function useStudio() {
         body: JSON.stringify({
           script: normalizedTurns,
           voice_names: voiceNames,
-          engine: episodeEngine,
+          engine: fastEngine ?? episodeEngine,
           style: deliveryStyle,
           save_to_disk: persist,
           topic: requestTopic || undefined,
@@ -620,7 +621,17 @@ export function useStudio() {
     const normalizedScript = script.filter((line) => line.content.trim());
     const turns = normalizedScript.slice(clip.start_turn, clip.end_turn + 1);
     if (!turns.length) throw new Error("The selected clip has no script turns");
-    const res = await requestAudio(turns, false, `${topic.trim()} - ${clip.title}`);
+    // A clip is a few seconds of audio, so it renders with the lightweight
+    // engine. Going through VibeVoice meant loading a 5.4 GB model and waiting
+    // over two minutes for a 30-second clip. The trade-off is a different
+    // voice from the episode, which the label below the player says.
+    const res = await requestAudio(
+      turns,
+      false,
+      `${topic.trim()} - ${clip.title}`,
+      undefined,
+      isIndic ? undefined : "kokoro",
+    );
     if (!res.ok) throw new Error(await readError(res));
     const blob = await res.blob();
     const safeName = clip.title.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "").toLowerCase() || "clip";
