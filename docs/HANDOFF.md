@@ -399,7 +399,56 @@ No code change is needed. The model id list is worth re-reading before the next
 provider retirement, because several of the ids hard-coded in `main.py` have already
 been retired once.
 
-### 8.6 What is genuinely still open
+### 8.6 The option matrix — what was tested and what broke
+
+The user asked for every option to be exercised: single person, multiple people,
+group discussion, different lengths, topics, languages. A harness now lives in the
+repo:
+
+```bash
+cd voice-service && .venv/bin/python test_option_matrix.py
+```
+
+It needs the backend running and covers 60 cells: the three formats, five
+durations, all 11 languages, all 6 delivery styles, content extras on and off,
+every engine, the Sarvam path for all 10 Indic languages, the clone consent gate,
+the library, the RSS feed, and 11 validation cases that must return 4xx.
+
+The first run failed 17 cells. The causes were not 17 bugs:
+
+1. **The episode ended mid-sentence.** The token budget in `DURATION_CONFIG` was
+   too tight, so the provider truncated the script and the truncated text was
+   rendered as-is. The audio faithfully stopped on a fragment. Fixed by raising
+   the budgets and adding `ensure_complete_ending()` in `script_pipeline.py`,
+   which drops a dangling fragment and then generates a sign-off, so the last
+   thing a listener hears is a finished thought.
+
+2. **Reasoning models returning empty content.** Groq's `openai/gpt-oss-120b` and
+   DeepSeek's `deepseek-v4-flash` spend part of their budget on hidden reasoning
+   tokens. When reasoning exhausts the budget the visible `content` comes back
+   empty — and an empty string was treated as success, so the fallback chain
+   never fired and the episode had zero words. An empty response is now a failure
+   that falls through to the next provider, the shared `_openai_compatible_chat()`
+   helper retries once with a larger budget, and the chain makes one more full
+   pass before giving up.
+
+3. **Odia was mapped to the wrong Sarvam code.** `SARVAM_LANGUAGE_CODES` sent
+   `od-IN` as `or-IN`, which the API rejects, so every Odia episode failed.
+
+4. **Bad input leaked as 500.** An empty topic and an unsupported Sarvam
+   language are client errors. They now return 422 and 400.
+
+5. **A cloning engine asked for a voice it did not have** failed deep inside the
+   model with "No conditionals available". It now says which voices exist.
+
+6. **Truncated content-extras JSON** failed the whole extras pass. It is now
+   retried once with a bigger budget. Malformed JSON is still not retried, so
+   the existing contract test still holds.
+
+Also fixed in this pass: `podcast/generate` was converting the provider's 503
+into a 500, so a temporary provider outage looked like a server fault.
+
+### 8.7 What is genuinely still open
 
 - **Reply to Agensi.** Still unanswered. Nothing has been uploaded. The skill package
   in `skill/podcast-brain-pro/` is ready to zip.

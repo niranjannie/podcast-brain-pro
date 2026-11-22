@@ -846,7 +846,21 @@ def groq_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperature
                 time.sleep(wait)
                 continue
             if status == 429:
-                # Fail immediately on rate limit so fallback happens fast
+                # Respect the server's cooldown when it gives one, then retry
+                # once. Falling straight through loses the script when the
+                # limit has already expired by the next call.
+                retry_after = 0.0
+                response = getattr(e, "response", None)
+                if response is not None:
+                    try:
+                        retry_after = float(response.headers.get("retry-after", 0))
+                    except (TypeError, ValueError):
+                        retry_after = 0.0
+                if attempt == 0:
+                    wait = min(max(retry_after, 2.0), 25.0)
+                    print(f"Groq rate limited ({status}), waiting {wait:.1f}s then retrying.")
+                    time.sleep(wait)
+                    continue
                 print(f"Groq rate limited ({status}), failing fast to fallback.")
                 raise HTTPException(status_code=429, detail=f"Groq API rate-limited: {last_exception}")
             if status in (503, 502, 500):
@@ -888,6 +902,10 @@ def _openai_compatible_chat(
     }
     budget = max_tokens
     for attempt in range(2):
+        # A large budget means more reasoning tokens, which take longer to
+        # produce. A fixed timeout would cut off exactly the retry that exists
+        # to rescue a reasoning-model run, so the timeout scales with the budget.
+        request_timeout = max(timeout, 20 + budget // 60)
         resp = requests.post(
             url,
             headers=headers,
@@ -897,7 +915,7 @@ def _openai_compatible_chat(
                 "temperature": temperature,
                 "max_tokens": budget,
             },
-            timeout=timeout,
+            timeout=request_timeout,
         )
         resp.raise_for_status()
         message = resp.json()["choices"][0]["message"]
@@ -1122,6 +1140,21 @@ def llm_chat(messages: List[Dict[str, str]], max_tokens: int = 600, temperature:
             # own code must surface as a 500, not as eight "provider" failures.
             detail = getattr(e, "detail", None) or str(e)
             errors.append(f"{name}: {detail}")
+
+    # Every configured provider answered with nothing. This happens when the
+    # reasoning models happen to spend their whole budget on hidden reasoning, so
+    # it is intermittent rather than a permanent outage. One more pass with a
+    # larger budget usually gets through.
+    logger.warning("Every provider returned an empty response; retrying the chain once.")
+    retry_budget = max(max_tokens * 2, 4000)
+    for name, fn in providers:
+        try:
+            text = fn(messages, max_tokens=retry_budget, temperature=temperature)
+            if (text or "").strip():
+                return text
+        except (requests.RequestException, HTTPException, KeyError, IndexError, ValueError):
+            continue
+
     raise HTTPException(
         status_code=503,
         detail=(
@@ -2755,7 +2788,34 @@ Now write the complete script."""
             if not script:
                 # Fallback: treat entire text as host
                 script = [{"speaker": speakers[0], "content": raw_script}]
-        
+
+            # A multi-host format that came back as one voice is not the episode
+            # the caller asked for. Ask once more, making the speaker labels
+            # explicit; if that fails too, keep what we have rather than losing it.
+            if len({turn["speaker"] for turn in script}) < min(len(speakers), 2):
+                logger.warning(
+                    "Conversation collapsed into one speaker; asking once more for %s.",
+                    speakers,
+                )
+                try:
+                    repaired = llm_chat([
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": (
+                            user_prompt
+                            + "\n\nIMPORTANT: this is a conversation, not a monologue. "
+                            "Every line must begin with one of these speaker names "
+                            f"followed by a colon: {', '.join(speakers)}. Use at least "
+                            "two of them, alternating."
+                        )},
+                    ], max_tokens=groq_max_tokens)
+                    repaired_script = parse_conversation_script(repaired, speakers)
+                    if len({turn["speaker"] for turn in repaired_script}) >= min(len(speakers), 2):
+                        script = repaired_script
+                except HTTPException:
+                    raise
+                except Exception as exc:
+                    logger.warning("Conversation repair failed: %s", exc)
+
         word_count = sum(len(item["content"].split()) for item in script)
 
         # Auto-expand if significantly under target (common for Indic LLM outputs)
@@ -2808,6 +2868,10 @@ Now write the complete script."""
             "extras_error": extras_error,
             "generation_time_seconds": gen_time,
         }
+    except HTTPException:
+        # A provider failure is a 503, not a 500. Preserving the status tells the
+        # caller the problem is temporary and worth retrying.
+        raise
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
