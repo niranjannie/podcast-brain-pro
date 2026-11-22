@@ -1,5 +1,17 @@
 # Fresh assessment — November 2026, second pass
 
+> **Final implementation update (2026-11-22):** the pending items in this assessment have
+> now been implemented. Qwen3-TTS CustomVoice/Base and Chatterbox run through an isolated
+> persistent MLX worker; Kokoro/Qwen/Chatterbox multi-host, Sarvam multi-host, show notes,
+> measured chapters, social clips, cast previews, no-LLM rerendering, and landing-media
+> compression are in place. Chatterbox is no longer blocked by Python 3.14 — not because
+> the dependency chain was fixed, but because it now runs on MLX instead of PyTorch.
+> Read `docs/HANDOFF.md` section 8 for the verification record. **That record is narrower
+> than it first appears:** VibeVoice longform/realtime was not re-rendered end to end
+> against the current tree, and the existing render artifacts predate the last edits to
+> `engines.py`. The rest of this file is the original second-pass assessment and
+> recommendation history.
+
 Written by a different model than the first pass, asked to start from the original
 request with fresh eyes: the Agensi email, the two named bugs, the six-month-old stack,
 "voice modulations, proper pause and expressions", "more advanced features", and the new

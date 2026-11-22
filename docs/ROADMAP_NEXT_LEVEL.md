@@ -1,5 +1,12 @@
 # Roadmap — taking Podcast Brain Pro to the next level
 
+> **Status update (2026-11-22):** show notes, chapter persistence, social clips, no-LLM
+> rerendering, cast previews, lightweight local-engine multi-host rendering, Sarvam
+> multi-host rendering, and landing-audio compression are implemented. The remaining items
+> below are future enhancements, not unfinished promises from the original request. See
+> `docs/HANDOFF.md` section 8 for the exact verification — and note that it is narrower
+> than "implemented and verified" implies: VibeVoice longform/realtime was not re-rendered
+> end to end against the current tree.
 Date: 2026-11-21
 Companion documents: `docs/PRODUCT_AUDIT_2026-11.md` (what is broken and what was
 fixed), `docs/HANDOFF.md` (context for the next session).
