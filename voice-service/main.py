@@ -441,6 +441,7 @@ class PodcastScriptResponse(BaseModel):
     topic: str
     duration_minutes: int
     format: str
+    language: str
     script: List[Dict[str, str]]
     word_count: int
     generation_time_seconds: float
@@ -2857,6 +2858,7 @@ Now write the complete script."""
             "topic": req.topic,
             "duration_minutes": req.duration_minutes,
             "format": req.format,
+            "language": req.language,
             "script": script,
             "word_count": word_count,
             # Let the caller see that a "30 minute" request produced a two minute
