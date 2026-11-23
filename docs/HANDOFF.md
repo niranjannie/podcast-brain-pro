@@ -448,7 +448,31 @@ The first run failed 17 cells. The causes were not 17 bugs:
 Also fixed in this pass: `podcast/generate` was converting the provider's 503
 into a 500, so a temporary provider outage looked like a server fault.
 
-### 8.7 The fourth-pass follow-up work
+### 8.7 Two more defects the option matrix caught
+
+**An Indic conversation collapsed into one voice.** When the model writes a script in
+an Indic language it often labels its speakers with the role word in the target
+language — `সঞ্চালক:` for Host, `অতিথি:` for Guest — even when asked to keep the
+label in Latin script. The parser had two faults: its unknown-speaker pattern matched
+only ASCII letters, so an Indic label was not recognised as a label at all and got
+**spoken out loud** as part of the text; and where it did recognise one, it dropped
+the whole line, so a two-host conversation lost its content and came out as a single
+voice. Now an unfamiliar label is removed from the text but its words are kept, and
+distinct labels map to the cast in order of first appearance. The prompt also says to
+keep the labels in Latin script, because they are identifiers that select a voice, not
+words to be spoken. `parse_conversation_script` moved to `script_pipeline.py`, where the
+rest of the script contract lives and where it can be tested without importing torch.
+
+**One bad chapter threw away the whole extras payload.** The content model sometimes
+puts a chapter's `start_turn` in the wrong place, and the strict validator rejected the
+entire payload over it — the user lost the title, the summary, three takeaways, five
+social captions and three social clips because one number was off. The validator stays
+strict and still never retries: a payload that breaks the contract is a contract
+violation, not a transient error. The retry moved one layer out into
+`generate_content_extras_with_retry()`, so a second attempt costs one LLM call and the
+validation is not weakened.
+
+### 8.8 The fourth-pass follow-up work
 
 Four items landed after the option matrix, in response to what the matrix and the
 audit turned up.
@@ -534,7 +558,7 @@ A fresh-agent test produced monologue, interview and panel episodes in English, 
 interview and panel in Hindi, Tamil and Kannada; the bundled validator passed them, and
 rejected the same episode with the disclosure removed.
 
-### 8.8 What is genuinely still open
+### 8.9 What is genuinely still open
 
 - **Send the Agensi follow-up.** `docs/AGENSI_REPLY_2.md` is drafted but **not sent**.
   The commercial terms are settled; what is still open is the refund cap, the Zoneless
@@ -556,6 +580,11 @@ rejected the same episode with the disclosure removed.
 - **Tier-2 roadmap items, none started:** pronunciation dictionary, segment-level
   re-synthesis, per-speaker control panel, batch queue, C2PA manifests, a
   "Publish" panel for distribution.
+- **The creator's own outreach files still carry the old claims.** `MARKETING.md`,
+  `PROMO_AUDIO_SCRIPT.md`, `docs/HACKER_NEWS_POST.md`, `docs/REDDIT_POSTS.md` and
+  `docs/REDDIT_GUIDE.md` were corrected on 2026-11-23 but are untracked and belong to
+  the creator, so the corrections stay local. They said "zero cloud fees", "NVIDIA GPU"
+  and listed Assamese; all three were wrong.
 - **The clip voice trade-off.** Clips render with Kokoro so they take seconds,
   which means a clip does not sound like the episode. If the voice match
   matters more than the wait, the clip should render with the episode's engine
