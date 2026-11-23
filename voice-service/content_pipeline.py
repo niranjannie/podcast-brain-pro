@@ -12,7 +12,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 from script_pipeline import normalize_turns, strip_directives
 
-__all__ = ["generate_content_extras", "with_chapter_timing"]
+__all__ = [
+    "generate_content_extras",
+    "generate_content_extras_with_retry",
+    "with_chapter_timing",
+]
 
 _REQUIRED_KEYS = (
     "title",
@@ -462,6 +466,40 @@ def generate_content_extras(
             payload["social_clips"], spoken_texts
         ),
     }
+
+
+def generate_content_extras_with_retry(
+    topic: str,
+    script: List[Dict[str, Any]],
+    duration_minutes: int,
+    lang_name: str,
+    chapter_count: int,
+    llm_chat: Callable[[List[Dict[str, str]], int, float], str],
+) -> Dict[str, Any]:
+    """Generate content extras, retrying once if the model's output fails validation.
+
+    :func:`generate_content_extras` is deliberately strict and never retries: a
+    payload that breaks the contract is a contract violation, not a transient
+    error, and retrying inside the validator would make the contract tests
+    nondeterministic.
+
+    But the model sometimes places a chapter's ``start_turn`` wrongly, and
+    losing the title, summary, takeaways, captions and social clips over one
+    number is a bad outcome for a metadata pass that is optional anyway. So the
+    retry lives here, one layer out, where a second attempt costs one LLM call
+    and does not weaken the validation.
+    """
+    try:
+        return generate_content_extras(
+            topic, script, duration_minutes, lang_name, chapter_count, llm_chat
+        )
+    except ValueError as first_error:
+        try:
+            return generate_content_extras(
+                topic, script, duration_minutes, lang_name, chapter_count, llm_chat
+            )
+        except ValueError as second_error:
+            raise second_error from first_error
 
 
 def with_chapter_timing(extras: Dict[str, Any], starts: Dict[int, float]) -> Dict[str, Any]:

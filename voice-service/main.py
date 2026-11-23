@@ -99,7 +99,11 @@ from scipy.io import wavfile
 
 # Shared script contract: turn keys, delivery directives, chunking, voice resolution.
 from audio_pipeline import measure_loudness, normalize_loudness, stitch_wav_bytes, wav_duration_seconds
-from content_pipeline import generate_content_extras, with_chapter_timing
+from content_pipeline import (  # noqa: E402
+    generate_content_extras,
+    generate_content_extras_with_retry,
+    with_chapter_timing,
+)
 from engines import EngineUnavailable, get_engine, list_engines, synthesize
 from script_pipeline import (
     DEFAULT_STYLE,
@@ -2882,7 +2886,7 @@ Now write the complete script."""
                 else chapters or {2: 2, 5: 3, 10: 3}.get(req.duration_minutes, 4)
             )
             try:
-                extras = generate_content_extras(
+                extras = generate_content_extras_with_retry(
                     req.topic,
                     script,
                     req.duration_minutes,
@@ -2928,7 +2932,7 @@ def podcast_content_extras(req: ContentExtrasRequest):
             else DURATION_CONFIG.get(req.duration_minutes, DURATION_CONFIG[2])["chapters"]
                 or {2: 2, 5: 3, 10: 3}.get(req.duration_minutes, 4)
         )
-        extras = generate_content_extras(
+        extras = generate_content_extras_with_retry(
             req.topic,
             req.script,
             req.duration_minutes,

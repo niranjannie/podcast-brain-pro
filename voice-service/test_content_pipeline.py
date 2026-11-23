@@ -14,7 +14,11 @@ from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from content_pipeline import generate_content_extras, with_chapter_timing  # noqa: E402
+from content_pipeline import (  # noqa: E402
+    generate_content_extras,
+    generate_content_extras_with_retry,
+    with_chapter_timing,
+)
 
 
 SCRIPT = [
@@ -438,6 +442,68 @@ class ContentExtrasTest(unittest.TestCase):
         self.assertEqual(timed["chapters"][1]["startTime"], 12.346)
         with self.assertRaisesRegex(ValueError, "chapter turn 3"):
             with_chapter_timing(extras, {0: 0.0})
+
+
+class ContentExtrasRetryTest(unittest.TestCase):
+    """The caller retries a failed metadata pass; the validator does not.
+
+    The model sometimes places a chapter's ``start_turn`` wrongly. The validator
+    is strict on purpose and never retries, but the caller tries once more so a
+    single bad number does not throw away the title, summary, takeaways,
+    captions and social clips with it.
+    """
+
+    def _flaky_llm(self, bad_payload, good_payload):
+        calls = []
+
+        def llm(messages, max_tokens=600, temperature=0.7):
+            calls.append(messages)
+            return json.dumps(bad_payload if len(calls) == 1 else good_payload)
+
+        return llm, calls
+
+    def test_a_bad_first_attempt_is_retried_once(self):
+        bad = make_payload()
+        bad["chapters"][0]["start_turn"] = 1
+        good = make_payload()
+        llm, calls = self._flaky_llm(bad, good)
+
+        result = generate_content_extras_with_retry(
+            "A grounded topic", SCRIPT, 10, "English", 3, llm
+        )
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(result["chapters"][0]["start_turn"], 0)
+        self.assertTrue(result["summary"])
+
+    def test_two_failures_raise_the_second_error(self):
+        bad = make_payload()
+        bad["chapters"][0]["start_turn"] = 1
+        llm, calls = self._flaky_llm(bad, bad)
+
+        with self.assertRaisesRegex(ValueError, "first chapter.*turn 0"):
+            generate_content_extras_with_retry(
+                "A grounded topic", SCRIPT, 10, "English", 3, llm
+            )
+        self.assertEqual(len(calls), 2)
+
+    def test_a_good_first_attempt_is_not_retried(self):
+        llm, calls = self._flaky_llm(make_payload(), make_payload())
+        generate_content_extras_with_retry(
+            "A grounded topic", SCRIPT, 10, "English", 3, llm
+        )
+        self.assertEqual(len(calls), 1)
+
+    def test_the_validator_itself_never_retries(self):
+        # The retry lives in the caller. generate_content_extras must reject a
+        # malformed payload on the first attempt.
+        bad = make_payload()
+        bad["chapters"][0]["start_turn"] = 1
+        llm = RecordingLLM(json.dumps(bad))
+        with self.assertRaisesRegex(ValueError, "first chapter.*turn 0"):
+            generate_content_extras(
+                "A grounded topic", SCRIPT, 10, "English", 3, llm
+            )
+        self.assertEqual(llm.call_count, 1)
 
 
 if __name__ == "__main__":
