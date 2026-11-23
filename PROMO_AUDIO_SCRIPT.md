@@ -30,11 +30,11 @@
 
 ### [SOLUTION — 0:45-1:20]
 
-**Expert:** Enter Podcast Brain Pro. An open-source AI podcast factory that runs entirely on your machine.
+**Expert:** Enter Podcast Brain Pro. An open-source AI podcast factory that renders the audio on your own machine.
 
 **Host:** Here's how it works. You type a topic — say, "The future of quantum computing" — and in 30 seconds, the app researches and writes a full conversational script. Choose a format: solo monologue, two-person interview, or three-person panel. Pick a language — English or any of 10 Indian languages including Hindi, Tamil, Telugu, Kannada, Bengali, and more.
 
-**Expert:** Then click Generate Audio. The app uses Microsoft's VibeVoice AI to synthesize natural, studio-quality speech locally on your Apple Silicon Mac or NVIDIA GPU. No cloud fees. No subscription. Your audio, your machine, your control.
+**Expert:** Then click Generate Audio. The app synthesizes natural, studio-quality speech locally — Microsoft's VibeVoice AI, or Kokoro, Qwen3-TTS, or Chatterbox, which can even clone a voice you own, with consent. No per-minute voice bill, no subscription. Your audio, your machine, your control.
 
 ---
 

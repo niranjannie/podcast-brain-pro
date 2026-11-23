@@ -254,7 +254,7 @@ We welcome contributions!
 
 Priority areas: CUDA support · Faster multi-speaker stitching · More languages · UI/UX
 
-See [`CONTRIBUTING.md`](./CONTRIBUTING.md) and [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
+See [`docs/CONTRIBUTING.md`](./docs/CONTRIBUTING.md) and [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 
 ---
 
