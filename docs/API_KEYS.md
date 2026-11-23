@@ -4,9 +4,9 @@ Podcast Brain Pro uses a **fallback chain** for script generation. If the primar
 
 ## Current Fallback Order
 
-1. **Dialogram** (`qwen-3.6-plus`) — recommended primary
+1. **Dialogram** (`qwen-3.6-plus`) — third-party router, no public API docs
 2. **Groq** (`openai/gpt-oss-20b`) — very fast, generous free-tier rate limit
-3. **DeepSeek** (`deepseek-v4-flash`)
+3. **DeepSeek** (`deepseek-v4-flash`) — verified, free tier
 4. **Ollama** (local, no key needed)
 5. **Gemini** (`gemini-2.5-flash`)
 6. **Mistral** (`mistral-small-latest`)
@@ -38,18 +38,20 @@ OPENROUTER_MODEL=some/model:free
 
 ## Free-Tier Providers
 
-### Dialogram (Primary — Recommended)
+### Dialogram (First in the Chain)
 - **Model:** `qwen-3.6-plus` (Alibaba)
 - **Why:** Huge context, excellent creative writing, generous free tier
 - **Get key:** https://dialogram.me/
 - **Note:** This is a third party router with no public API docs. Treat it as a
   convenience, not a guarantee, and keep a second provider key configured.
 
-### Groq
+### Groq (Recommended — Verified)
 - **Model:** `openai/gpt-oss-20b`
 - **Why:** Blazing fast inference, 131k context, and the 20b model is small enough
   to stay well inside the free-tier rate limit
-- **Caveat:** Daily rate limits can be exhausted quickly
+- **Caveat:** `openai/gpt-oss-120b` also works and writes slightly better, but it is
+  slower and burns the rate limit faster. Daily rate limits can still be exhausted
+  on a heavy run.
 - **Get key:** https://console.groq.com/keys
 
 ### Google AI Studio

@@ -18,9 +18,18 @@
 |--------|-----|--------|
 | **Minimum** | 24 GB | Works for 3–5 min scripts with chunking. 10+ min possible but slow (~15–25 min gen time). Close other heavy apps first. |
 | **Recommended** | 32+ GB | Reliable 5–10 min generation with fewer chunks. |
-| **Ideal** | 48+ GB or CUDA GPU | No chunking needed; fastest generation. |
+| **Ideal** | 48+ GB | No chunking needed; fastest generation. |
 
-**Why?** The VibeVoice-TTS-1.5B model uses a diffusion-based generation process. During inference, intermediate activation tensors spike memory to **18–22 GB** regardless of model weight precision. This is a fundamental property of the architecture, not a bug. We mitigated it with:
+**Which hardware?** Apple Silicon (M1–M4) is the supported path: the device layer picks
+MPS when it is available and falls back to CPU otherwise. **There is no CUDA path** —
+`get_device()` checks for MPS and stops there, so an NVIDIA machine runs the models on
+the CPU and is slow. Kokoro 82M is the exception: it is small enough to run on any CPU,
+so you can draft and preview without a Mac.
+
+**Why the memory numbers?** The VibeVoice-TTS-1.5B model uses a diffusion-based generation
+process. During inference, intermediate activation tensors spike memory to **18–22 GB**
+regardless of model weight precision. This is a fundamental property of the architecture,
+not a bug. We mitigated it with:
 
 - `float16` weights (reduces idle memory from ~23 GB → ~7 GB)
 - **Auto-chunking**: scripts >350 words (MPS) or >300 words (CPU) are split into memory-safe segments, generated separately, and stitched with 400 ms silence gaps.
@@ -224,7 +233,7 @@ Longform 1.5B uses significant memory. Try shorter episodes (≤5 min) or close 
 If you still hit memory pressure on a 24 GB Mac:
 1. Lower chunk size: `MAX_LONGFORM_WORDS_MPS=250`
 2. Lower diffusion steps: `LONGFORM_DDPM_STEPS=3` (fastest, slight quality drop)
-3. Restart the backend to clear MPS cache: `Ctrl+C` then `uvicorn main:app --host 0.0.0.0 --port 8000`
+3. Restart the backend to clear MPS cache: `Ctrl+C` then `uvicorn main:app --host 127.0.0.1 --port 8000`
 
 ---
 

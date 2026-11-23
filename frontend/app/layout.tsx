@@ -7,7 +7,7 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 export const metadata: Metadata = {
   title: "Podcast Brain Pro — AI Podcast Factory",
   description:
-    "Generate research-backed podcast scripts instantly. Synthesize multi-speaker audio locally on Apple Silicon or NVIDIA GPU.",
+    "Generate research-backed podcast scripts instantly. Synthesize multi-speaker audio locally on Apple Silicon, or on any CPU with Kokoro.",
 };
 
 export default function RootLayout({

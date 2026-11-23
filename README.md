@@ -48,7 +48,7 @@ Your ideas deserve to be heard.
 
 ## 🚀 Quick Start
 
-> **Prerequisites:** macOS Apple Silicon for MLX engines, or Linux/Windows + NVIDIA GPU for VibeVoice · Python 3.12 recommended · Node.js 18+ · Disk space depends on selected models
+> **Prerequisites:** macOS Apple Silicon (M1–M4) for the MLX engines, or any machine for Kokoro on CPU · Python 3.12 recommended · Node.js 18+ · Disk space depends on the models you pick
 
 ```bash
 # 1. Clone
@@ -68,7 +68,7 @@ python3.12 -m venv .venv-mlx
 
 # 3. Configure keys
 cp .env.example .env
-# Add at least one LLM key (Dialogram recommended — free tier)
+# Add at least one LLM key. Groq and DeepSeek both have free tiers.
 
 # 4. Start backend
 source .venv/bin/activate
@@ -96,7 +96,7 @@ Full setup guide: [`docs/SETUP.md`](./docs/SETUP.md)
 - **Multi-host everywhere** — VibeVoice, Kokoro, Qwen3-TTS, consented Chatterbox clones, and Sarvam Indian-language conversations retain per-speaker voices and pauses.
 - **Podcast ready output** — Every export is normalised to -16 LUFS, the RSS feed carries the transcript, and the episode metadata records the loudness measurement.
 - **RSS feed built-in** — Generate once, publish everywhere. No extra tools needed.
-- **Truly open source** — MIT licensed. Full code, full control, zero restrictions.
+- **Truly open source** — MIT licensed. Full code, full control. (The *code* is unrestricted; the VibeVoice *model* has its own licence and watermark — see [AI Disclosure](#%E2%9A%A0%EF%B8%8F-ai-disclosure).)
 
 ---
 
@@ -110,6 +110,7 @@ Hear real episodes generated from a single sentence — zero editing:
 
 | Sample | Language | Format | Length |
 |--------|----------|--------|--------|
+| Podcast Brain Pro in Action | 🇺🇸 English | Product story | 2:33 |
 | AI Future Discussion | 🇺🇸 English | Interview | 5:12 |
 | Technology Trends Panel | 🇺🇸 English | Panel | 3:42 |
 | Nation Building: India vs China | 🇮🇳 Hindi | Interview | 4:49 |
@@ -124,13 +125,24 @@ Hear real episodes generated from a single sentence — zero editing:
 ![Landing Page](docs/screenshots/landing-hero.png)
 
 ### Actual App Interface (runs at `localhost:3000`)
+
+**Create — the episode brief, format, language, engine and cast**
 ![App Main](docs/screenshots/app-main.png)
 
-### Settings Modal
+**Voice Lab — every engine, its licence, its size, and whether it clones**
+![Voice Lab](docs/screenshots/app-voicelab.png)
+
+**Library — search, play, rename, re-render**
+![Library](docs/screenshots/app-library.png)
+
+**Settings Modal**
 ![App Settings](docs/screenshots/app-settings.png)
 
-### Help & Setup Guide
+**Help & Setup Guide**
 ![App Help](docs/screenshots/app-help.png)
+
+**The whole studio, including show notes, chapters and social clips**
+![Full app](docs/screenshots/app-fullpage.png)
 
 See [`docs/screenshots/`](./docs/screenshots/) for full resolution images.
 
@@ -138,15 +150,24 @@ See [`docs/screenshots/`](./docs/screenshots/) for full resolution images.
 
 ## 📦 Model Downloads (Automatic)
 
-On first audio generation, models download automatically from HuggingFace:
+On first use of each engine, models download automatically from HuggingFace. Nothing is
+fetched until you pick that engine.
 
 | Model | Size | Time | Use Case |
 |-------|------|------|----------|
-| VibeVoice Realtime 0.5B | ~2 GB | ~2–5 min | English monologue ≤10 min |
-| VibeVoice Longform 1.5B | ~5.4 GB | ~5–10 min | Multi-speaker / >10 min |
-| VibeVoice ASR 7B | ~14 GB | ~10–15 min | Speech-to-text (optional) |
+| **Kokoro 82M** | ~300 MB | ~1 min | Fast CPU drafts, cast previews, social clips |
+| **Qwen3-TTS 1.7B** (CustomVoice / Base) | ~2 GB each | ~3–5 min | Preset voices, delivery instructions, voice cloning |
+| **Chatterbox Multilingual v3** | ~1–2 GB | ~3–5 min | Expressive consented voice cloning |
+| **VibeVoice Realtime 0.5B** | ~2 GB | ~2–5 min | English monologue ≤10 min |
+| **VibeVoice Longform 1.5B** | ~5.4 GB | ~5–10 min | Multi-speaker / >10 min |
+| **VibeVoice ASR 7B** | ~14 GB | ~10–15 min | Speech-to-text (optional) |
 
 **Cache:** `~/.cache/huggingface/hub/`
+
+**Two environments, on purpose.** Kokoro and VibeVoice live in `voice-service/.venv`.
+Qwen3-TTS and Chatterbox need `transformers>=5.14` while VibeVoice breaks on it, so
+they live in a separate `voice-service/.venv-mlx` and are driven over a pipe by
+`mlx_worker.py`. See `docs/SETUP.md`.
 
 ---
 
@@ -160,25 +181,31 @@ Topic → Web Research → LLM Script → TTS Engine → Audio + RSS
 - **Frontend:** Next.js 14 + React + Tailwind CSS
 - **Backend:** FastAPI (Python)
 - **Script generation:** LLM chain with Tavily web search
-- **English TTS:** VibeVoice 1.5B (local PyTorch)
+- **English TTS:** VibeVoice 1.5B, Kokoro 82M, Qwen3-TTS and Chatterbox (all local)
 - **Indic TTS:** Sarvam AI Bulbul API
-- **Output:** WAV + JSON metadata + RSS feed
+- **Output:** WAV + transcript + show notes + chapters + JSON metadata + RSS feed
 
 ```
 podcast-brain-pro/
 ├── frontend/              # Next.js 14 + React + Tailwind
+│   ├── app/page.tsx       # Studio shell
+│   ├── app/landing/       # Marketing page
+│   ├── components/studio/ # Create, Library, Voice Lab, Extras views
+│   └── lib/useStudio.ts   # Studio state and API calls
 ├── voice-service/         # FastAPI backend
 │   ├── main.py            # API endpoints, TTS, LLM fallbacks
-│   ├── script_pipeline.py # Script contract, delivery directives, voice mapping
+│   ├── script_pipeline.py # Script contract, directives, voices, disclosure
 │   ├── engines.py         # Engine registry and persistent MLX worker client
 │   ├── mlx_worker.py      # Isolated Qwen3-TTS / Chatterbox runtime
 │   ├── content_pipeline.py # Show notes, chapters, captions, source-grounded clips
 │   ├── audio_pipeline.py  # Loudness, valid PCM stitching, duration measurement
 │   ├── rss_generator.py   # RSS feed generator
 │   ├── test_script_pipeline.py
+│   ├── test_option_matrix.py # Exercises every option against a running backend
 │   ├── start.sh           # Startup script
 │   └── .env.example       # API key template
 ├── vibevoice-src/         # Microsoft VibeVoice (pip install -e)
+├── skill/                 # Marketplace skill package
 └── docs/                  # Setup, architecture, API keys, contributing
 ```
 
@@ -188,9 +215,12 @@ podcast-brain-pro/
 
 Podcast Brain Pro uses a **fallback chain** of free-tier LLM providers.
 
-**Recommended:** [Dialogram](https://dialogram.me/) (`qwen-3.6-plus`) — free tier
+**Recommended:** [Groq](https://console.groq.com/keys) (`openai/gpt-oss-20b`) or
+[DeepSeek](https://platform.deepseek.com/api_keys) (`deepseek-v4-flash`) — both verified,
+both with a free tier. [Dialogram](https://dialogram.me/) (`qwen-3.6-plus`) is also in the
+chain, but it is a third-party router with no public API docs, so keep a second key.
 
-**Free fallbacks:** Groq (`openai/gpt-oss-120b`), DeepSeek, Gemini, Mistral, Together AI, OpenRouter (a free model is picked from the live catalogue), plus a local Ollama model for fully offline scripting.
+**Free fallbacks:** Groq (`openai/gpt-oss-20b`), DeepSeek, Gemini, Mistral, Together AI, OpenRouter (a free model is picked from the live catalogue), plus a local Ollama model for fully offline scripting.
 
 Every provider id can be overridden with an environment variable (`GROQ_MODEL`, `GEMINI_MODEL`, ...), so a retired model id is a one line change, not a code change.
 

@@ -7,7 +7,7 @@ conflict with VibeVoice, so Qwen/Chatterbox use an isolated, persistent worker.
 
 ## Prerequisites
 
-- macOS Apple Silicon for Qwen3-TTS/Chatterbox MLX; VibeVoice also supports CUDA
+- macOS Apple Silicon for Qwen3-TTS/Chatterbox MLX and for VibeVoice; Kokoro 82M runs on any CPU
 - Python 3.12 and Node.js 18+
 - ffmpeg for loudness normalization and compressed Sarvam codecs
 - espeak-ng for Kokoro (`brew install espeak-ng` on macOS)

@@ -90,9 +90,9 @@ const SAMPLES = [
 ];
 
 const STATS = [
-  { value: "10", label: "Languages", icon: <Globe className="w-4 h-4" /> },
-  { value: "3", label: "Formats", icon: <Layers className="w-4 h-4" /> },
-  { value: "0", label: "Cloud Fees", icon: <Zap className="w-4 h-4" /> },
+  { value: "11", label: "Languages", icon: <Globe className="w-4 h-4" /> },
+  { value: "4", label: "Local Engines", icon: <Cpu className="w-4 h-4" /> },
+  { value: "0", label: "Voice Fees", icon: <Zap className="w-4 h-4" /> },
   { value: "∞", label: "Generations", icon: <Sparkles className="w-4 h-4" /> },
 ];
 
@@ -156,17 +156,17 @@ const SETUP_STEPS = [
   {
     icon: <Terminal className="w-5 h-5" />,
     title: "Clone & Install",
-    code: "git clone https://github.com/niranjannie/podcast-brain-pro.git\ncd podcast-brain-pro/voice-service\npython3 -m venv .venv && source .venv/bin/activate\npip install -r requirements.txt",
+    code: "git clone https://github.com/niranjannie/podcast-brain-pro.git\ncd podcast-brain-pro/voice-service\npython3.12 -m venv .venv && source .venv/bin/activate\npip install -r requirements.txt",
   },
   {
     icon: <Key className="w-5 h-5" />,
     title: "Configure Keys",
-    code: "cp .env.example .env\n# Add Dialogram / GitHub / Groq key",
+    code: "cp .env.example .env\n# Add one LLM key — Groq or DeepSeek both have free tiers",
   },
   {
     icon: <Monitor className="w-5 h-5" />,
     title: "Start Backend",
-    code: "./start.sh\n# uvicorn main:app --host 0.0.0.0 --port 8000",
+    code: "./start.sh\n# uvicorn main:app --host 127.0.0.1 --port 8000\n# The backend has no auth. Keep it on localhost.",
   },
   {
     icon: <Zap className="w-5 h-5" />,
@@ -178,11 +178,11 @@ const SETUP_STEPS = [
 const FAQ = [
   {
     q: "Is it really free?",
-    a: "Yes. Podcast Brain Pro is MIT licensed and completely free. The only costs are your own compute (electricity) and optional LLM API calls for script generation.",
+    a: "The software is MIT licensed and free. Audio synthesis runs on your own machine, so there is never a per-minute voice bill. Script generation does use a cloud LLM, but every provider on the chain has a free tier, and a local Ollama model makes even that free.",
   },
   {
     q: "Do I need a GPU?",
-    a: "Audio synthesis runs on Apple Silicon (M1-M4) or NVIDIA GPUs. For script generation, you only need an internet connection and a free LLM API key.",
+    a: "No. Kokoro 82M runs on a CPU, so you can draft and preview on any Mac. VibeVoice wants an Apple Silicon Mac (M1–M4) and is happiest there. The Qwen3-TTS and Chatterbox engines need Apple Silicon for MLX.",
   },
   {
     q: "What languages are supported?",
@@ -190,15 +190,19 @@ const FAQ = [
   },
   {
     q: "How does the audio quality compare to ElevenLabs?",
-    a: "Open-source TTS models trade some quality for being free and local. The English longform model sounds very natural. Indic languages use Sarvam AI's commercial-grade API.",
+    a: "Open-source TTS models trade some quality for being free and local. VibeVoice's longform model sounds very natural in English. Indic languages use Sarvam AI's commercial-grade API. Qwen3-TTS and Chatterbox are close behind and support voice cloning.",
   },
   {
     q: "Can I use this commercially?",
-    a: "Absolutely. MIT license means you can use, modify, and sell it without restrictions.",
+    a: "The code is MIT, so you can use, modify and sell it. Two caveats about the models, not the code: VibeVoice's model card restricts it to research and development, covers English and Chinese only, and embeds an audible AI disclaimer plus a watermark in every file it generates. For a commercially clean voice use Kokoro, Qwen3-TTS or Chatterbox — all permissively licensed, no watermark.",
+  },
+  {
+    q: "Does it tell listeners the audio is AI-generated?",
+    a: "Yes. Every episode opens with a spoken AI disclosure in its own language, and the RSS feed and episode metadata carry the machine-readable marking too. Article 50 of the EU AI Act requires this for synthetic audio, and it applies from 2 August 2026.",
   },
   {
     q: "How long does setup take?",
-    a: "About 10 minutes if you have Python and Node installed. Downloading the TTS models takes the longest (~5 min on fast internet).",
+    a: "About ten minutes. The models download on first use — nothing is fetched until you ask for it.",
   },
 ];
 
@@ -548,7 +552,7 @@ export default function LandingPage() {
 
             <p className="text-lg sm:text-xl text-muted max-w-2xl mx-auto leading-relaxed">
               Podcast Brain Pro turns any topic into a studio-quality podcast — locally, in any language, with AI.
-              No studio. No subscriptions. Just your machine and an idea.
+              No studio. No subscriptions. Your own machine does the audio; a free-tier LLM writes the words.
             </p>
 
             {/* Promo Audio Player */}
@@ -614,6 +618,28 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* AI disclosure */}
+      <section className="max-w-4xl mx-auto px-4 sm:px-6 mb-8">
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-5 flex items-start gap-4">
+          <div className="w-10 h-10 rounded-lg bg-amber-500/10 flex items-center justify-center text-amber-400 shrink-0">
+            <Volume2 className="w-5 h-5" />
+          </div>
+          <div>
+            <p className="text-sm font-medium text-foreground">
+              Every sample on this page is AI-generated.
+            </p>
+            <p className="text-xs text-muted mt-1 leading-relaxed">
+              The scripts are written by a language model and the voices are synthesised by a
+              text-to-speech model. No human records any part of them. The app carries the
+              same disclosure into every episode it makes — spoken at the start of the
+              audio, and marked in the feed and the episode metadata — because
+              Article 50 of the EU AI Act requires it for synthetic audio from
+              2 August 2026.
+            </p>
+          </div>
+        </div>
+      </section>
+
       {/* Pain Points */}
       <section className="py-16 sm:py-20 bg-white/[0.02]">
         <div className="max-w-4xl mx-auto px-4 sm:px-6">
@@ -655,7 +681,7 @@ export default function LandingPage() {
             {[
               { step: "01", title: "Type a Topic", desc: "Enter any subject — \"The future of quantum computing\" or \"India's space program.\" The AI researches it using web search and writes a natural, conversational script." },
               { step: "02", title: "Choose Your Format", desc: "Monologue for storytelling. Interview for two perspectives. Panel for a lively discussion with interruptions and disagreements." },
-              { step: "03", title: "Generate Audio Locally", desc: "VibeVoice synthesizes speech on your Apple Silicon Mac or NVIDIA GPU. For Indian languages, Sarvam AI delivers native-quality narration. No cloud. No fees." },
+              { step: "03", title: "Generate Audio Locally", desc: "VibeVoice, Kokoro, Qwen3-TTS and Chatterbox synthesize speech on your own machine — Kokoro even runs on a CPU. For Indian languages, Sarvam AI delivers native-quality narration. Only the script-writing step uses a cloud LLM." },
             ].map((s) => (
               <div key={s.step} className="flex gap-5 rounded-xl border border-white/5 bg-white/[0.03] p-6">
                 <div className="text-3xl font-black text-accent/30 shrink-0">{s.step}</div>
@@ -679,10 +705,24 @@ export default function LandingPage() {
           </div>
           <div className="grid md:grid-cols-2 gap-5">
             <div className="rounded-xl border border-white/5 bg-white/[0.03] overflow-hidden">
-              <img src="/screenshots/app-main.png" alt="Main app interface with episode configuration" className="w-full" />
+              <img src="/screenshots/app-main.png" alt="Studio create view with the episode brief, format, language, engine and cast" className="w-full" />
               <div className="p-4">
                 <div className="text-sm font-semibold">Episode Configuration</div>
-                <div className="text-xs text-muted mt-1">Enter a topic, choose format, pick language, and generate.</div>
+                <div className="text-xs text-muted mt-1">Enter a topic, choose format, language, engine and cast, then generate.</div>
+              </div>
+            </div>
+            <div className="rounded-xl border border-white/5 bg-white/[0.03] overflow-hidden">
+              <img src="/screenshots/app-voicelab.png" alt="Voice Lab showing the engine catalogue with licence, size and cloning support" className="w-full" />
+              <div className="p-4">
+                <div className="text-sm font-semibold">Voice Lab</div>
+                <div className="text-xs text-muted mt-1">Every engine, its licence, its size, and whether it can clone a voice you own.</div>
+              </div>
+            </div>
+            <div className="rounded-xl border border-white/5 bg-white/[0.03] overflow-hidden">
+              <img src="/screenshots/app-library.png" alt="Episode library with search, playback and loudness measurements" className="w-full" />
+              <div className="p-4">
+                <div className="text-sm font-semibold">Episode Library</div>
+                <div className="text-xs text-muted mt-1">Search, play, rename, re-render with a new cast, and export.</div>
               </div>
             </div>
             <div className="rounded-xl border border-white/5 bg-white/[0.03] overflow-hidden">
@@ -700,10 +740,10 @@ export default function LandingPage() {
               </div>
             </div>
             <div className="rounded-xl border border-white/5 bg-white/[0.03] overflow-hidden">
-              <img src="/screenshots/app-fullpage.png" alt="Full app page showing system status and all controls" className="w-full" />
+              <img src="/screenshots/app-fullpage.png" alt="Full studio page showing the script editor, show notes, chapters and social clips" className="w-full" />
               <div className="p-4">
-                <div className="text-sm font-semibold">System Status & Controls</div>
-                <div className="text-xs text-muted mt-1">Monitor model cache, choose voice cast, and track generation.</div>
+                <div className="text-sm font-semibold">Script, Show Notes & Distribution</div>
+                <div className="text-xs text-muted mt-1">Edit the script, then publish it with takeaways, chapter markers and social clips.</div>
               </div>
             </div>
           </div>
@@ -746,7 +786,7 @@ export default function LandingPage() {
                 <div className="w-2 h-2 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
                 <div>
                   <span className="font-medium text-foreground">Local TTS</span>
-                  <span className="text-muted"> — VibeVoice 1.5B (PyTorch)</span>
+                  <span className="text-muted"> — VibeVoice 1.5B, Kokoro 82M, Qwen3-TTS and Chatterbox</span>
                 </div>
               </div>
               <div className="flex items-start gap-3">
@@ -760,7 +800,7 @@ export default function LandingPage() {
                 <div className="w-2 h-2 rounded-full bg-gray-500 mt-1.5 shrink-0" />
                 <div>
                   <span className="font-medium text-foreground">Output</span>
-                  <span className="text-muted"> — WAV + JSON + RSS feed</span>
+                  <span className="text-muted"> — WAV + transcript + show notes + chapters + JSON + RSS feed</span>
                 </div>
               </div>
             </div>
@@ -827,7 +867,7 @@ export default function LandingPage() {
                 Your Keys, Your Control
               </div>
               <div className="space-y-2.5 text-sm">
-                {["Dialogram API","Groq (optional)","Sarvam API","Tavily (optional)","Ollama (local, optional)"].map((k) => (
+                {["Groq or DeepSeek (one is enough)","Sarvam API (Indic languages)","Tavily (optional, web research)","Ollama (local, fully offline)"].map((k) => (
                   <div key={k} className="flex items-center justify-between py-1.5 border-b border-white/5 last:border-0">
                     <span className="text-muted">{k}</span>
                     <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
@@ -846,7 +886,7 @@ export default function LandingPage() {
                   { color: "bg-blue-500", text: "React Frontend (Next.js 14)" },
                   { color: "bg-purple-500", text: "FastAPI Backend (Python)" },
                   { color: "bg-amber-500", text: "Script Generation (LLM Chain)" },
-                  { color: "bg-emerald-500", text: "VibeVoice TTS (Local GPU)" },
+                  { color: "bg-emerald-500", text: "Local TTS (4 engines, incl. voice cloning)" },
                   { color: "bg-orange-500", text: "Sarvam AI (Indic Languages)" },
                 ].map((item, i) => (
                   <div key={i} className="flex items-center gap-2">

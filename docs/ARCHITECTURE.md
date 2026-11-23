@@ -12,20 +12,23 @@ Podcast Brain Pro is a **FastAPI backend** with a **React/Next.js frontend**. It
                            │                                │                                │
                            ▼                                ▼                                ▼
                   ┌───────────────┐              ┌─────────────────┐              ┌─────────────────┐
-                  │   Dialogram   │              │  VibeVoice TTS  │              │   Sarvam AI     │
-                  │  (Qwen 3.6)   │              │  (Local GPU)    │              │  (Cloud TTS)    │
-                  │  Script Gen   │              │  English Audio  │              │  Indian Lang    │
+                  │  LLM chain   │              │  Local TTS      │              │   Sarvam AI     │
+                  │ Groq,        │              │ VibeVoice 1.5B  │              │  (Cloud TTS)    │
+                  │ DeepSeek,    │              │ Kokoro 82M      │              │  Indian Lang    │
+                  │ Gemini, ...  │              │ Qwen3-TTS 1.7B  │              │                 │
+                  │ + Tavily     │              │ Chatterbox v3   │              │                 │
+                  │  Script Gen  │              │  (voice clone)  │              │                 │
                   └───────────────┘              └─────────────────┘              └─────────────────┘
                                                          ▲
                                                          │
                                               Auto-download from HuggingFace
-                                              on first audio generation
+                                              on first use of each engine
 ```
 
 ## Design Philosophy
 
 - **Instant gratification:** Script generation is fast and cloud-based. Anyone can try it immediately.
-- **Local audio power:** High-quality English TTS requires Apple Silicon MPS or NVIDIA CUDA. This runs locally.
+- **Local audio power:** The audio engines run on your own machine. Kokoro needs only a CPU; VibeVoice wants Apple Silicon MPS; Qwen3-TTS and Chatterbox need Apple Silicon for MLX.
 - **Modular providers:** LLM keys are swappable via a fallback chain.
 
 ## Tech Stack
@@ -107,7 +110,7 @@ be overridden with an environment variable (`GROQ_MODEL`, `GEMINI_MODEL`, ...), 
 retired id is a config change, not a code change:
 
 1. Dialogram (`qwen-3.6-plus`)
-2. Groq (`openai/gpt-oss-120b`)
+2. Groq (`openai/gpt-oss-20b`)
 3. DeepSeek (`deepseek-v4-flash`)
 4. Ollama (local, `qwen3:8b` by default)
 5. Gemini (`gemini-2.5-flash`)
@@ -133,6 +136,16 @@ understands:
 five captions, and source-grounded clip turn ranges. `/podcast/extras` refreshes that data
 without rewriting the script.
 
+Two repairs protect the listener's experience, both in `script_pipeline.py`:
+
+- `ensure_complete_ending()` drops a trailing fragment when the provider truncated the
+  script, then generates a sign-off. A script cut off by the token budget used to be
+  rendered as-is, so every episode ended mid-sentence.
+- `add_disclosure()` prepends the audible AI disclosure, in the episode's language. It
+  runs at the script layer so the user can see it, and again at the audio layer so it
+  survives the user deleting it. `AI_DISCLOSURE=false` turns it off. Article 50 of the
+  EU AI Act requires this for synthetic audio from 2 August 2026.
+
 `audio_pipeline.py` normalises exports to -16 LUFS with a -1.5 dBTP ceiling, stitches valid
 PCM WAVs, and measures actual frame durations.
 
@@ -153,7 +166,11 @@ PCM WAVs, and measures actual frame durations.
 | `/tts/clone` | POST | Consent-gated Qwen/Chatterbox cloning |
 | `/tts/longform` | POST | Multi-speaker VibeVoice/Kokoro/Qwen/Chatterbox TTS |
 | `/tts/sarvam` | POST | Single- or multi-speaker Indian-language cloud TTS |
-| `/asr` | POST | Speech-to-text transcription |
+| `/asr/transcribe` | POST | Speech-to-text transcription |
+| `/models/status` | GET | Which models are cached or loaded, device and limits |
+| `/podcast/rename` | POST | Rename a saved episode |
+| `/podcast/delete` | DELETE | Delete a saved episode |
+| `/feed/podcast.rss` | GET | Podcast feed with transcript, chapters and AI disclosure |
 
 ## Concurrency & Safety
 
