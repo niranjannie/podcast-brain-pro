@@ -522,9 +522,9 @@ truncated scripts — while the source had moved to v1.2.0. Uploading it would h
 an episode generator that produces audio with no disclosure on it.
 `skill/build_package.sh` now builds the zip from source, refuses to package a
 `.DS_Store` or a `__pycache__`, and prints the version it built. The zip is gitignored
-so it cannot drift again. The upload artifact is
-`skill/podcast-brain-pro-skill.zip`, sha256
-`1d7e94251591b9ed60f64668b7f85dd64156060afb3ad2388640fb291cd469bc`, seven files.
+so it cannot drift again. The upload artifact is `skill/podcast-brain-pro-skill.zip`,
+seven files. Its hash changes whenever the source does, so rebuild it and read the
+hash off the script rather than trusting a value written in a document.
 
 **The package was tested the way a reviewer would test it.** The frontmatter carries
 `name` and `description`, which is Joeri's stated requirement, and `name` is
@@ -545,9 +545,9 @@ rejected the same episode with the disclosure removed.
   does not cover India, so the route is Zoneless — USDC on Solana to the creator's own
   wallet — and the creator will need a Solana wallet and government ID.
 - **Upload the listing at $12, paid from the start.** The package is built and tested;
-  the upload artifact is `skill/podcast-brain-pro-skill.zip`, sha256 `1d7e9425…`. Build
-  it with `./skill/build_package.sh`, never by hand-syncing a copy. If Joeri's answer
-  says the price is locked at upload, switch to $15 instead.
+  the upload artifact is `skill/podcast-brain-pro-skill.zip`. Build it with
+  `./skill/build_package.sh`, never by hand-syncing a copy. If Joeri's answer says the
+  price is locked at upload, switch to $15 instead.
 - **Path A or B for the local engine.** Path A (keep the vendored VibeVoice,
   disclose it) is what ships today. Path B (move to a maintained permissive
   model) is still a tracked project, and Qwen3-TTS is now a working part of it.
