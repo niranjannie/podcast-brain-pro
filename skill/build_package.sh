@@ -21,18 +21,11 @@ if [ ! -f "$SOURCE_DIR/SKILL.md" ]; then
   exit 1
 fi
 
-# Refuse to build a package that still carries macOS metadata.
-if find "$SOURCE_DIR" -name '.DS_Store' -print -quit | grep -q .; then
-  echo "error: .DS_Store found in the package. Remove it before building." >&2
-  exit 1
-fi
-
-# A __pycache__ directory means the validator has been imported locally. It is
-# not part of the skill and must not ship in it.
-if find "$SOURCE_DIR" -type d -name '__pycache__' -print -quit | grep -q .; then
-  echo "error: __pycache__ found in the package. Remove it before building." >&2
-  exit 1
-fi
+# Build artifacts that must never ship in the package. They appear whenever the
+# validator is imported locally, so the build excludes them rather than
+# refusing: the archive is guaranteed clean either way, and a normal test run
+# does not block the build.
+EXCLUDES=(--exclude='.DS_Store' --exclude='__pycache__' --exclude='*.pyc')
 
 VERSION="$(sed -n 's/^version:[[:space:]]*//p' "$SOURCE_DIR/SKILL.md" | head -1)"
 if [ -z "$VERSION" ]; then
@@ -45,7 +38,7 @@ trap 'rm -rf "$STAGE"' EXIT
 
 # Copy so the zip holds exactly the package and nothing else.
 mkdir -p "$STAGE/$PACKAGE_NAME"
-tar -C "$SOURCE_DIR" -cf - . | tar -C "$STAGE/$PACKAGE_NAME" -xf -
+tar -C "$SOURCE_DIR" "${EXCLUDES[@]}" -cf - . | tar -C "$STAGE/$PACKAGE_NAME" -xf -
 
 rm -f "$OUTPUT"
 (cd "$STAGE" && zip -r -q "$OUTPUT" "$PACKAGE_NAME")
