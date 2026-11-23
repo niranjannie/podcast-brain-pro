@@ -16,25 +16,33 @@
 > reasoning is recorded in `docs/BACKEND_AUDIT_2_FIXES.md` so the next reviewer does not
 > have to redo it. 41 unit tests and 14 API smoke checks pass.
 >
-> **Update, fourth pass (2026-11-22, this session).** Everything the second-pass
-> assessment listed as pending is now implemented and verified: Qwen3-TTS CustomVoice and
-> Base, and Chatterbox Multilingual, run through an isolated persistent MLX worker;
-> lightweight-engine and Sarvam multi-host rendering; show notes, measured chapters and
-> social clips; cast previews; re-render without a new LLM script; and landing-media
+> **Update, fourth pass (2026-11-22).** Everything the second-pass assessment listed
+> as pending is now implemented and verified: Qwen3-TTS CustomVoice and Base, and
+> Chatterbox Multilingual, run through an isolated persistent MLX worker; lightweight-
+> engine and Sarvam multi-host rendering; show notes, measured chapters and social
+> clips; cast previews; re-render without a new LLM script; and landing-media
 > compression (62 MB of WAV → 12 MB of M4A). Chatterbox is no longer blocked by Python
 > 3.14 — not because the dependency chain was fixed, but because it now runs on MLX
-> instead of PyTorch. See section 8 for the full verification record, the two
-> environments this requires, and what remains genuinely open.
+> instead of PyTorch. See section 8 for the full verification record.
+>
+> **Update, fifth pass (2026-11-23, this session).** The option matrix was re-run after
+> the fourth-pass fixes, which exposed two more real defects: an Indic conversation
+> collapsed into a single voice, and the `/podcast/generate` response omitted the
+> `language` field so the skill's own validator rejected every non-English episode for
+> missing the English disclosure. Both are fixed and verified; see section 9. The
+> backend test count rose from 67 to 102, the build script was made to exclude build
+> junk instead of refusing to build, and the skill package was rebuilt and re-tested.
 >
 > **One correction to the record.** `docs/FRESH_ASSESSMENT_2026-11.md` and
 > `docs/ROADMAP_NEXT_LEVEL.md` point at "the final verification record" in this file.
-> That record did not exist until this pass. If you are reading the two documents'
+> That record did not exist until the fourth pass. If you are reading the two documents'
 > status banners and believe the verification was broader than section 8 says, check
-> section 8 — it is deliberately narrower than the banners imply.
+> sections 8 and 9 — they are deliberately narrower than the banners imply.
 
-Last updated: 2026-11-22 by the agent that ran the fourth pass (MLX engines, content
-extras, studio polish). Read this first, then `docs/PRODUCT_AUDIT_2026-11.md` (what was
-broken and what was fixed) and `docs/ROADMAP_NEXT_LEVEL.md` (what to do next).
+Last updated: 2026-11-23 by the agent that ran the fifth pass (Indic parser fix,
+language field in response, build script, option matrix). Read this first, then
+`docs/PRODUCT_AUDIT_2026-11.md` (what was broken and what was fixed) and
+`docs/ROADMAP_NEXT_LEVEL.md` (what to do next).
 
 ---
 
@@ -85,6 +93,12 @@ voice mapping, (b) the README claiming Assamese while the code supports Odia.
 | Commit | What |
 |---|---|
 | `b7981db` | Backend: speaker/voice mapping, delivery directives, current provider models, loudness, transcripts, RSS base URL, transformers pin |
+| `6e1f503` | Docs: stop pinning the upload zip's hash in a document |
+| `718025f` | Fix: retry a failed content-extras pass instead of discarding it |
+| `2c173e0` | Fix: stop an Indic conversation collapsing into one voice |
+| `4061aca` | Docs: record the two defects the option matrix caught |
+| `47645f6` | Fix: exclude build junk from the package instead of refusing to build |
+| `d2fa53f` | Fix: return the requested language in the generate response |
 
 ---
 
@@ -191,7 +205,7 @@ the same skill elsewhere.
 ```bash
 cd /Volumes/DevSSD/projects/AI_VOICEVIBE
 
-# Backend logic, no models needed — 67 tests across five modules
+# Backend logic, no models needed — 102 tests across five modules
 cd voice-service && .venv/bin/python -m unittest \
   test_script_pipeline test_audio_pipeline test_content_pipeline \
   test_dialogue_paths test_backend_utils
@@ -246,9 +260,10 @@ Silicon.
 4. ~~Ship the tier-1 features~~ — **mostly done** in the fourth pass: show notes,
    chapter markers, re-render without a new script, and social clips all ship.
    The pronunciation dictionary is still open; it is listed under tier 2 now.
-5. **Add the disclosure** — an "AI-generated" line at the start of every episode and a
-   note in the README — before this is used commercially or listed anywhere. **Still
-   open, and now the single highest-priority item.**
+5. ~~**Add the disclosure**~~ — **done** in the fourth pass: every saved episode
+   opens with a spoken AI disclosure in the episode's own language, the RSS feed and
+   JSON sidecar carry machine-readable marking, and `AI_DISCLOSURE=false` can disable
+   it. The README says not to disable it for published content.
 6. **Re-render one episode through each engine** against the current tree. The existing
    renders predate the last edits to `engines.py` (section 8.3).
 
@@ -336,7 +351,7 @@ Chatterbox moved off PyTorch entirely.
 
 **Verified by running it, in this pass:**
 
-- 67 backend unit tests pass (`test_script_pipeline`, `test_audio_pipeline`,
+- 102 backend unit tests pass (`test_script_pipeline`, `test_audio_pipeline`,
   `test_content_pipeline`, `test_dialogue_paths`, `test_backend_utils`).
 - `tsc --noEmit` clean; `npm run build` clean.
 - Backend `/health` returns ok on MPS; all four engines report `installed=true`,
@@ -580,11 +595,12 @@ rejected the same episode with the disclosure removed.
 - **Tier-2 roadmap items, none started:** pronunciation dictionary, segment-level
   re-synthesis, per-speaker control panel, batch queue, C2PA manifests, a
   "Publish" panel for distribution.
-- **The creator's own outreach files still carry the old claims.** `MARKETING.md`,
+- **The creator's own outreach files are gitignored, not tracked.** `MARKETING.md`,
   `PROMO_AUDIO_SCRIPT.md`, `docs/HACKER_NEWS_POST.md`, `docs/REDDIT_POSTS.md` and
-  `docs/REDDIT_GUIDE.md` were corrected on 2026-11-23 but are untracked and belong to
-  the creator, so the corrections stay local. They said "zero cloud fees", "NVIDIA GPU"
-  and listed Assamese; all three were wrong.
+  `docs/REDDIT_GUIDE.md` still say "zero cloud fees", "NVIDIA GPU" and (in some)
+  Assamese. They were corrected locally in the previous session, but because they are
+  gitignored the corrections live only on this machine and are not in the repo. They
+  are public-facing and will be read; decide whether to un-ignore and commit the fixes.
 - **The clip voice trade-off.** Clips render with Kokoro so they take seconds,
   which means a clip does not sound like the episode. If the voice match
   matters more than the wait, the clip should render with the episode's engine
@@ -593,10 +609,81 @@ rejected the same episode with the disclosure removed.
   overridable by environment variable, which is the right design, but the
   *defaults* need a periodic check — two of them were already dead when this
   pass started, and Groq's default moved to `gpt-oss-20b` in this pass.
-- **The creator's own outreach files still carry the old claims.** `MARKETING.md`,
-  `PROMO_AUDIO_SCRIPT.md`, `docs/HACKER_NEWS_POST.md`, `docs/REDDIT_POSTS.md` and
-  `docs/REDDIT_GUIDE.md` are untracked and belong to the creator, so they were left
-  alone. They still say "zero cloud fees" and "NVIDIA GPU", both of which the code
-  contradicts: script generation is a cloud LLM call, and `get_device()` has no CUDA
-  path. They are public-facing and will be read.
+
+## 9. Fifth pass — what was fixed and verified
+
+Run 2026-11-23 after the fourth-pass option matrix. The matrix harness itself is in
+`voice-service/test_option_matrix.py`.
+
+### 9.1 Three real defects fixed
+
+**Indic speaker labels collapsed the conversation to one voice.** When the model
+writes a script in an Indic language it often labels speakers with the role word in
+the target language — `সঞ্চালক:` for Host, `অতিথি:` for Guest — even when asked to
+keep the label in Latin script. The parser's unknown-speaker pattern matched only
+ASCII letters, so an Indic label was either spoken out loud as part of the text or the
+whole line was dropped. Now an unfamiliar label is removed from the text but its words
+are kept, and distinct labels map to the cast in order of first appearance. A label
+that differs from a cast name only in case or punctuation is that cast member. The
+prompt was tightened to say the labels are identifiers that select a voice, not words
+to be spoken. `parse_conversation_script` moved from `main.py` to `script_pipeline.py`,
+where the rest of the script contract lives and where it can be tested without
+importing torch.
+
+**`/podcast/generate` omitted the `language` field.** `PodcastScriptResponse` and the
+endpoint return dict now include it. Without it the skill's validator defaulted to
+`en` and rejected every non-English episode for missing the English disclosure, even
+though the right local disclosure was spoken first. This aligns the app output with
+the contract documented in `skill/podcast-brain-pro/reference/script-format.md`.
+
+**`skill/build_package.sh` refused to build after a normal test run.** It treated any
+`__pycache__` or `.DS_Store` in the source tree as fatal. Test runs create
+`__pycache__`, so the build failed every time. It now excludes them from the archive
+and guarantees a clean zip regardless of what junk is on disk.
+
+### 9.2 What was verified
+
+- **102 backend unit tests pass** (`test_script_pipeline`, `test_audio_pipeline`,
+  `test_content_pipeline`, `test_dialogue_paths`, `test_backend_utils`). 35 new parser
+  tests cover Bengali, Kannada, Tamil, Telugu, Hindi, Marathi, Gujarati, Punjabi,
+  Malayalam, Odia and mixed canonical/localised labels.
+- **All 11 supported languages produce two-host interview scripts.** The backend was
+  asked for a 2-minute interview in every language the app supports; every result had
+  distinct Host and Guest turns and the AI disclosure was spoken in the right language.
+- **The packaged validator accepts the app's own output.** Before the language-field
+  fix, English passed and every Indic language failed the disclosure check. After the
+  fix, English, Hindi, Kannada, Tamil, Bengali and Odia all pass the validator bundled
+  in `skill/podcast-brain-pro/scripts/validate_script.py`.
+- **The skill package builds cleanly.** `./skill/build_package.sh` now produces a
+  seven-file zip even after unit tests have run. The staging folder at
+  `/Volumes/DevSSD/projects/AI_PODCAST_SKILL` was synced from it.
+- **The frontend renders.** Both the studio (`/`) and the landing page (`/landing`)
+  load in a headless browser with no Next.js error overlay, all images complete, and
+  all audio elements error-free.
+
+### 9.3 What the matrix still shows as broken
+
+The option matrix covers the full combinatorial surface. A few cells still fail, but
+they are not new code defects:
+
+- **Short Indic scripts.** Some 2-minute requests in Kannada, Tamil and Telugu return
+  well under 300 words. The parser now preserves every word, so the issue is that the
+  scriptwriter model simply produces less text in those languages at that duration.
+  The app already reports `under_target=true`. A fix is either a language-specific
+  word budget or a retry when `under_target` is set.
+- **Long Latin-script words in Indic episodes.** The validator warns when it sees long
+  Latin-script tokens in an Indic script (e.g. "Podcast Brain Pro" or city names). This
+  is usually intentional — brand names and proper nouns do not get translated — but it
+  is worth reviewing per language.
+
+### 9.4 What is still genuinely open after this pass
+
+- **Send the Agensi follow-up.** `docs/AGENSI_REPLY_2.md` is drafted but not sent.
+- **Upload the listing.** The package is built; the artifact is
+  `skill/podcast-brain-pro-skill.zip`. Price is $12 unless Joeri says the price is
+  locked at upload, in which case use $15.
+- **Short-script retry for Indic languages.** Optional, but the matrix makes it clear
+  the current behaviour is inconsistent.
+- **Decide whether to commit the corrected outreach files.** They are gitignored and
+  live only on this machine.
 
