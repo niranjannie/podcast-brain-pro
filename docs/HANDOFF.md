@@ -483,16 +483,46 @@ says plainly that the clip voice differs from the episode voice.
 slow for the same output and both were eating the free-tier rate limit. The
 model id is still overridable with `GROQ_MODEL`.
 
-**The Agensi reply is drafted, not sent.** `docs/AGENSI_REPLY.md` is gitignored,
-like the other outreach material. Nothing has been uploaded and no payout
-account exists. Read it before creating one: five of the eleven questions can
-change whether the listing is worth doing at all.
+**The Agensi commercial terms are settled.** Joeri answered the first round of
+questions (2026-11-23). The decisions his answers imply:
+
+| Question | Answer | Consequence |
+|---|---|---|
+| Tool revenue | Buyer pays tool charges separately; the creator earns nothing from them. 70% applies to the skill price only. Paid single skills sit $10-$30, average order ~$11 | Price at **$12** |
+| Price floor | Under $5 is credit-only; card from $5. Minimum $1, but start at $10+ | $12 clears both |
+| Refunds | Refunds and chargebacks reverse the creator share. If already paid out it is taken back or deducted from future payouts. Agensi pays the chargeback fee | **No cap stated.** This is the open commercial risk |
+| Payout | Stripe Connect covers the EU, **not India** — so Zoneless (USDC on Solana) is the route. Nothing paid out until the identity check finishes. Agensi invoices on the creator's behalf; taxes are the creator's own | Set up Zoneless early |
+| Selling elsewhere | **Allowed.** Listing is non-exclusive; 6.3a only forbids the listing from linking to, promoting or upselling a paid version | Free here + paid elsewhere is fine, so long as the listing never points at it |
+| Distribution | Dashboard shows views, installs and sales. Paid listings get a ranking boost over free ones that match about as well | **List free first**, then price with real data |
+| Updates | No failed security checks plus AI approval may go live automatically; others are reviewed. Upload a new zip to the same listing | Turnaround unknown |
+| Packaging | A zip with `SKILL.md` at the root and `name` + `description` in the frontmatter is the whole requirement | The package already meets it |
+
+Joeri did not have detail on the refund cap, KYC documents, tax withholding, update
+turnaround, or a policy for media-generating skills, and said he would not guess. The
+follow-up draft asks for those four with concrete proposals rather than open questions:
+`docs/AGENSI_REPLY_2.md` (gitignored, like the other outreach material). Nothing has
+been uploaded and no payout account exists.
+
+**The staged zip had drifted and was rebuilt.** `/Volumes/DevSSD/projects/AI_PODCAST_SKILL`
+is a staging folder from the third pass, not another checkout. Its zip was still v1.1.0 —
+no AI disclosure, no disclosure check in the validator, and the old token budget that
+truncated scripts — while the source had moved to v1.2.0. Uploading it would have shipped
+an episode generator that produces audio with no disclosure on it.
+`skill/build_package.sh` now builds the zip from source, refuses to package a
+`.DS_Store`, and prints the version it built. The zip is gitignored so it cannot drift
+again.
 
 ### 8.8 What is genuinely still open
 
-- **Send the Agensi reply.** `docs/AGENSI_REPLY.md` is drafted but **not sent**.
-  Nothing has been uploaded and no payout account exists. Answer questions 1, 2,
-  3, 4 and 5 first — they can change whether the listing is worth doing.
+- **Send the Agensi follow-up.** `docs/AGENSI_REPLY_2.md` is drafted but **not sent**.
+  The commercial terms are settled; what is still open is the refund cap, the Zoneless
+  identity documents, the update turnaround, and any Agensi-side policy for
+  media-generating skills. Nothing has been uploaded and no payout account exists.
+- **Set up Zoneless early.** Payouts are blocked on the identity check, and Joeri's
+  advice is to start it before the listing goes live.
+- **List free first.** The dashboard shows views, installs and sales, and paid listings
+  get a ranking boost — so price with data rather than a guess. The plan is free first,
+  then set the price.
 - **Path A or B for the local engine.** Path A (keep the vendored VibeVoice,
   disclose it) is what ships today. Path B (move to a maintained permissive
   model) is still a tracked project, and Qwen3-TTS is now a working part of it.

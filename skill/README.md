@@ -17,10 +17,17 @@ skill/podcast-brain-pro/
 ## Build the upload zip
 
 ```bash
-cd skill
-rm -f podcast-brain-pro-skill.zip
-zip -r podcast-brain-pro-skill.zip podcast-brain-pro
+./skill/build_package.sh
 ```
+
+That builds `skill/podcast-brain-pro-skill.zip` from the source in this folder, checks
+the archive, refuses to package a `.DS_Store`, and prints the version it built.
+
+**Always rebuild rather than syncing a copy by hand.** A hand-synced copy drifted once:
+the staged zip was still version 1.1.0 — no AI disclosure, no disclosure check in the
+validator, and the old token budget that truncated scripts mid-sentence — while the
+source had moved on. Uploading that would have shipped an episode generator that
+produces audio with no disclosure on it.
 
 Upload the zip at <https://www.agensi.io/sell>.
 
@@ -43,3 +50,14 @@ exist when they do not.
 3. Read the disclosure note in `docs/ROADMAP_NEXT_LEVEL.md`: the local VibeVoice model
    embeds an audible AI-generated disclaimer and a watermark, and its model card
    restricts use to research and development. A commercial listing has to say so.
+4. The skill's own output carries an AI disclosure, in the episode's language, because
+   Article 50 of the EU AI Act requires it for synthetic audio. The validator enforces
+   it. Do not remove it to "save" a few words.
+
+## Marketplace packaging rules
+
+If you upload this to a marketplace, the listing, its description, its sample outputs
+and this package must not link to, promote or upsell a paid version of the skill or any
+related product sold elsewhere. The links here point at a free MIT-licensed repository,
+which is fine today. If you ever publish a paid version anywhere, remove those links
+from this package and from the listing before you upload an update.

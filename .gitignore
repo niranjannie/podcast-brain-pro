@@ -66,3 +66,8 @@ docs/REDDIT_POSTS.md
 docs/HACKER_NEWS_POST.md
 docs/LINKEDIN_POST.md
 docs/AGENSI_REPLY.md
+docs/AGENSI_REPLY_2.md
+
+# Build artifact. Regenerate with ./skill/build_package.sh. Committing a zip
+# lets it drift from the source it was built from.
+skill/podcast-brain-pro-skill.zip
