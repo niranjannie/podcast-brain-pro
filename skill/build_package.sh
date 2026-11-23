@@ -27,6 +27,13 @@ if find "$SOURCE_DIR" -name '.DS_Store' -print -quit | grep -q .; then
   exit 1
 fi
 
+# A __pycache__ directory means the validator has been imported locally. It is
+# not part of the skill and must not ship in it.
+if find "$SOURCE_DIR" -type d -name '__pycache__' -print -quit | grep -q .; then
+  echo "error: __pycache__ found in the package. Remove it before building." >&2
+  exit 1
+fi
+
 VERSION="$(sed -n 's/^version:[[:space:]]*//p' "$SOURCE_DIR/SKILL.md" | head -1)"
 if [ -z "$VERSION" ]; then
   echo "error: no version in the SKILL.md frontmatter" >&2

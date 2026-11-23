@@ -493,7 +493,7 @@ questions (2026-11-23). The decisions his answers imply:
 | Refunds | Refunds and chargebacks reverse the creator share. If already paid out it is taken back or deducted from future payouts. Agensi pays the chargeback fee | **No cap stated.** This is the open commercial risk |
 | Payout | Stripe Connect covers the EU, **not India** — so Zoneless (USDC on Solana) is the route. Nothing paid out until the identity check finishes. Agensi invoices on the creator's behalf; taxes are the creator's own | Set up Zoneless early |
 | Selling elsewhere | **Allowed.** Listing is non-exclusive; 6.3a only forbids the listing from linking to, promoting or upselling a paid version | Free here + paid elsewhere is fine, so long as the listing never points at it |
-| Distribution | Dashboard shows views, installs and sales. Paid listings get a ranking boost over free ones that match about as well | **List free first**, then price with real data |
+| Distribution | Dashboard shows views, installs and sales. Paid listings get a ranking boost over free ones that match about as well | **List paid from the start** — the boost matters most for a listing with no history |
 | Updates | No failed security checks plus AI approval may go live automatically; others are reviewed. Upload a new zip to the same listing | Turnaround unknown |
 | Packaging | A zip with `SKILL.md` at the root and `name` + `description` in the frontmatter is the whole requirement | The package already meets it |
 
@@ -503,26 +503,51 @@ follow-up draft asks for those four with concrete proposals rather than open que
 `docs/AGENSI_REPLY_2.md` (gitignored, like the other outreach material). Nothing has
 been uploaded and no payout account exists.
 
+**The price decision, and the condition attached to it.** The creator chose **$12**.
+Joeri's evidence: paid single skills sit between $10 and $30 with an average order
+around $11. $12 is 9% above that average and reads as a premium nudge that still
+clears an easy yes; $15 is 36% above it and asks a stranger, on a listing with no
+reviews, to justify fifteen dollars for a script generator. The creator's share is
+$8.40 at $12 and $10.50 at $15, but the goal of a first listing is the first sale,
+and a listing with reviews is worth more later than a high price on one without them.
+**The condition:** if the price turns out to be locked at upload, $15 is the better
+number, because $12 would then be permanent. The draft email asks Joeri how a price
+change works, and his answer decides it. A second argument for launching lower: refunds
+reverse the creator's share with no stated cap and are deducted from future payouts.
+
 **The staged zip had drifted and was rebuilt.** `/Volumes/DevSSD/projects/AI_PODCAST_SKILL`
 is a staging folder from the third pass, not another checkout. Its zip was still v1.1.0 —
 no AI disclosure, no disclosure check in the validator, and the old token budget that
 truncated scripts — while the source had moved to v1.2.0. Uploading it would have shipped
 an episode generator that produces audio with no disclosure on it.
 `skill/build_package.sh` now builds the zip from source, refuses to package a
-`.DS_Store`, and prints the version it built. The zip is gitignored so it cannot drift
-again.
+`.DS_Store` or a `__pycache__`, and prints the version it built. The zip is gitignored
+so it cannot drift again. The upload artifact is
+`skill/podcast-brain-pro-skill.zip`, sha256
+`1d7e94251591b9ed60f64668b7f85dd64156060afb3ad2388640fb291cd469bc`, seven files.
+
+**The package was tested the way a reviewer would test it.** The frontmatter carries
+`name` and `description`, which is Joeri's stated requirement, and `name` is
+kebab-case. The disclosure lines in `script_pipeline.py`, `validate_script.py` and the
+skill's reference were checked against each other across all 11 languages and agree.
+A fresh-agent test produced monologue, interview and panel episodes in English, plus
+interview and panel in Hindi, Tamil and Kannada; the bundled validator passed them, and
+rejected the same episode with the disclosure removed.
 
 ### 8.8 What is genuinely still open
 
 - **Send the Agensi follow-up.** `docs/AGENSI_REPLY_2.md` is drafted but **not sent**.
   The commercial terms are settled; what is still open is the refund cap, the Zoneless
-  identity documents, the update turnaround, and any Agensi-side policy for
-  media-generating skills. Nothing has been uploaded and no payout account exists.
-- **Set up Zoneless early.** Payouts are blocked on the identity check, and Joeri's
-  advice is to start it before the listing goes live.
-- **List free first.** The dashboard shows views, installs and sales, and paid listings
-  get a ranking boost — so price with data rather than a guess. The plan is free first,
-  then set the price.
+  identity documents, the update turnaround, how a price change works, and any
+  Agensi-side policy for media-generating skills. Nothing has been uploaded and no
+  payout account exists.
+- **Set up Zoneless early.** Payouts are blocked on the identity check. Stripe Connect
+  does not cover India, so the route is Zoneless — USDC on Solana to the creator's own
+  wallet — and the creator will need a Solana wallet and government ID.
+- **Upload the listing at $12, paid from the start.** The package is built and tested;
+  the upload artifact is `skill/podcast-brain-pro-skill.zip`, sha256 `1d7e9425…`. Build
+  it with `./skill/build_package.sh`, never by hand-syncing a copy. If Joeri's answer
+  says the price is locked at upload, switch to $15 instead.
 - **Path A or B for the local engine.** Path A (keep the vendored VibeVoice,
   disclose it) is what ships today. Path B (move to a maintained permissive
   model) is still a tracked project, and Qwen3-TTS is now a working part of it.
@@ -539,4 +564,10 @@ again.
   overridable by environment variable, which is the right design, but the
   *defaults* need a periodic check — two of them were already dead when this
   pass started, and Groq's default moved to `gpt-oss-20b` in this pass.
+- **The creator's own outreach files still carry the old claims.** `MARKETING.md`,
+  `PROMO_AUDIO_SCRIPT.md`, `docs/HACKER_NEWS_POST.md`, `docs/REDDIT_POSTS.md` and
+  `docs/REDDIT_GUIDE.md` are untracked and belong to the creator, so they were left
+  alone. They still say "zero cloud fees" and "NVIDIA GPU", both of which the code
+  contradicts: script generation is a cloud LLM call, and `get_device()` has no CUDA
+  path. They are public-facing and will be read.
 
