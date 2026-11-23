@@ -118,6 +118,7 @@ from script_pipeline import (
     list_voices,
     looks_truncated,
     normalize_turns,
+    parse_conversation_script,
     plan_generation,
     resolve_voices,
     segment_gap_seconds,
@@ -1196,57 +1197,6 @@ Delivery directions, written inline where they belong:
     if style and style != DEFAULT_STYLE:
         rules += f"\n- The overall delivery of this episode is {style}."
     return rules
-
-def parse_conversation_script(raw_text: str, speakers: List[str]) -> List[Dict[str, str]]:
-    """Parse raw conversation text into a structured script array.
-
-    Two traps are handled explicitly:
-    - longer names are matched first, so "Guest A" is not read as "Guest";
-    - a line that starts with a name the cast does not contain is dropped and counted,
-      not silently appended to the previous speaker's turn.
-    """
-    script = []
-    lines = raw_text.strip().split('\n')
-    ordered = sorted(speakers, key=len, reverse=True)
-    speaker_pattern = re.compile(
-        rf'^({"|".join(re.escape(s) for s in ordered)})\s*[:\-]\s*(.*)$', re.IGNORECASE
-    )
-    unknown_prefix = re.compile(r"^([A-Za-z][A-Za-z0-9 _.'-]{0,40})\s*[:\-]\s+")
-    dropped_lines = 0
-
-    current_speaker = None
-    current_content = ""
-
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        match = speaker_pattern.match(line)
-        if match:
-            if current_speaker and current_content:
-                script.append({"speaker": current_speaker, "content": current_content.strip()})
-            spoken_name = match.group(1)
-            canonical = next((s for s in speakers if s.lower() == spoken_name.lower()), speakers[0])
-            current_speaker = canonical
-            current_content = match.group(2)
-        elif unknown_prefix.match(line):
-            # Looks like "Somebody: text" for a speaker we do not have. Attributing it
-            # to the previous host would quietly corrupt the script.
-            dropped_lines += 1
-            logger.warning("Dropping a line from an unknown speaker: %s", line[:60])
-        else:
-            if current_content:
-                current_content += " " + line
-            else:
-                current_content = line
-
-    if current_speaker and current_content:
-        script.append({"speaker": current_speaker, "content": current_content.strip()})
-
-    if dropped_lines:
-        logger.warning("Dropped %d line(s) from unknown speakers", dropped_lines)
-    return script
-
 
 def build_speaker_list(format_type: str, speakers: Optional[List[str]]) -> List[str]:
     defaults = {
@@ -2780,6 +2730,7 @@ Original conversation:
 - Target length: approximately {target_words} words (about {req.duration_minutes} minutes when spoken)
 - Start with {speakers[0]} introducing the show and topic
 - Each line must begin with the speaker name followed by a colon (e.g., "{speakers[0]}: Welcome to the show...")
+- Write those speaker labels exactly as given, in Latin script, even when the script is in another language. Do not translate "Host" or "Guest" into the target language - the labels are identifiers that select a voice, not words to be spoken.
 - Sounds conversational, with natural back-and-forth
 - Presents multiple perspectives fairly
 - Avoids hype, clickbait, or fear-mongering
@@ -2809,6 +2760,7 @@ Format rules:
 - Target: {target_words} words (~{req.duration_minutes} min)
 - Speakers: {speaker_list_str}
 - Each line starts with "SpeakerName: ..."
+- Write those speaker labels exactly as given, in Latin script, even when the script is in another language. Do not translate them - the labels select a voice, they are not spoken.
 - Cover all chapters in the outline
 - Natural, conversational dialogue
 - Write entirely in {lang_name}, do not use English.

@@ -23,6 +23,7 @@ from script_pipeline import (  # noqa: E402
     list_voices,
     looks_truncated,
     normalize_turns,
+    parse_conversation_script,
     plan_generation,
     resolve_voices,
     segment_gap_seconds,
@@ -393,6 +394,90 @@ class TestDisclosure(unittest.TestCase):
         script = [{"speaker": "Host", "content": "Welcome to the show."}]
         fixed = add_disclosure(script, "en")
         self.assertEqual(fixed[0]["content"].count("artificial intelligence"), 1)
+
+
+class ConversationParsingTest(unittest.TestCase):
+    """Raw model output must become ordered turns with the right voices.
+
+    The recurring failure: a model writing an Indic script labels its speakers
+    with the role word in the target language ("সঞ্চালক:" for "Host"). The parser
+    used to drop those lines entirely, so a two-host conversation collapsed into
+    one voice and the episode lost its content.
+    """
+
+    def test_canonical_labels_are_parsed(self):
+        script = parse_conversation_script(
+            "Host: Welcome to the show.\nGuest: Thanks for having me.\nHost: Let's begin.",
+            ["Host", "Guest"],
+        )
+        self.assertEqual([t["speaker"] for t in script], ["Host", "Guest", "Host"])
+        self.assertEqual(script[0]["content"], "Welcome to the show.")
+
+    def test_localised_labels_map_to_the_cast_in_order(self):
+        raw = (
+            "সঞ্চালক: আজ আমরা শহরে গাছ নিয়ে আলোচনা করব।\n"
+            "অতিথি: ধন্যবাদ, খুব ভালো প্রশ্ন।\n"
+            "সঞ্চালক: গাছ ছায়া দেয়।"
+        )
+        script = parse_conversation_script(raw, ["Host", "Guest"])
+        self.assertEqual([t["speaker"] for t in script], ["Host", "Guest", "Host"])
+        # The localised label must not be spoken.
+        self.assertNotIn("সঞ্চালক", script[0]["content"])
+        self.assertNotIn("অতিথি", script[1]["content"])
+        # And the words themselves must survive.
+        self.assertIn("ছায়া", script[2]["content"])
+
+    def test_localised_labels_map_in_every_script(self):
+        cases = {
+            "kannada": "ಸಂಚಾಲಕ: ಇಂದು ಮರಗಳ ಬಗ್ಗೆ.\nಅತಿಥಿ: ಧನ್ಯವಾದ.",
+            "tamil": "தலைவர்: இன்று மரங்கள் பற்றி.\nவிருந்தினர்: நன்றி.",
+            "telugu": "దర్శకుడు: ఈరోజు చెట్లు.\nఅతిథి: ధన్యవాదం.",
+            "hindi": "प्रस्तुतकर्ता: आज पेड़ों के बारे में।\nअतिथि: धन्यवाद।",
+            "marathi": "सूत्रसंचालक: आज झाडांवर.\nअतिथी: धन्यवाद.",
+        }
+        for language, raw in cases.items():
+            with self.subTest(language=language):
+                script = parse_conversation_script(raw, ["Host", "Guest"])
+                self.assertEqual(
+                    [t["speaker"] for t in script], ["Host", "Guest"], language
+                )
+
+    def test_a_canonical_label_advances_the_pointer(self):
+        # "Host:" first, then a localised label: the localised one must be the
+        # guest, not a second host.
+        raw = "Host: Welcome.\nঅতিথি: ধন্যবাদ।\nHost: Let's begin."
+        script = parse_conversation_script(raw, ["Host", "Guest"])
+        self.assertEqual([t["speaker"] for t in script], ["Host", "Guest", "Host"])
+
+    def test_an_unknown_ascii_label_keeps_its_words(self):
+        raw = "Host: Welcome.\nAlice: a line from someone else.\nHost: Back to you."
+        script = parse_conversation_script(raw, ["Host", "Guest"])
+        spoken = " ".join(t["content"] for t in script)
+        # The words must survive, and the unfamiliar label must not be spoken.
+        self.assertIn("a line from someone else.", spoken)
+        self.assertNotIn("Alice", spoken)
+
+    def test_a_label_differing_only_in_case_is_the_same_speaker(self):
+        raw = "HOST: Welcome.\nGUEST: Thanks.\nHost: Begin."
+        script = parse_conversation_script(raw, ["Host", "Guest"])
+        self.assertEqual([t["speaker"] for t in script], ["Host", "Guest", "Host"])
+
+    def test_a_canonical_label_keeps_its_own_voice_even_out_of_order(self):
+        raw = "Guest: Hello.\nHost: Hi.\nGuest: Bye."
+        script = parse_conversation_script(raw, ["Host", "Guest"])
+        self.assertEqual([t["speaker"] for t in script], ["Guest", "Host", "Guest"])
+
+    def test_a_third_label_reuses_the_last_cast_member(self):
+        raw = "Host: One.\nGuest: Two.\nHost: Three.\nNarrator: Four."
+        script = parse_conversation_script(raw, ["Host", "Guest"])
+        self.assertEqual(script[-1]["speaker"], "Guest")
+        self.assertIn("Four.", script[-1]["content"])
+
+    def test_plain_paragraphs_join_the_current_speaker(self):
+        raw = "Host: First line.\nSecond line of the same thought.\nGuest: Mine."
+        script = parse_conversation_script(raw, ["Host", "Guest"])
+        self.assertEqual(len(script), 2)
+        self.assertIn("Second line", script[0]["content"])
 
 
 if __name__ == "__main__":

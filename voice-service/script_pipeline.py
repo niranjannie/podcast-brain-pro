@@ -11,9 +11,12 @@ historically read the key ``role``. Both spellings are accepted here and normali
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+logger = logging.getLogger(__name__)
 
 # ============== Delivery directives ==============
 # Directives live inline in the spoken text and are stripped before synthesis.
@@ -574,6 +577,135 @@ def trim_to_last_complete_sentence(text: str) -> str:
     if tail.startswith('"') or tail.startswith("”"):
         cut += 1
     return stripped[:cut].strip()
+
+
+# ============== Conversation parsing ==============
+# The script contract, part two: turning raw model output into ordered turns.
+
+def parse_conversation_script(raw_text: str, speakers: List[str]) -> List[Dict[str, str]]:
+    """Parse raw conversation text into a structured script array.
+
+    Two traps are handled explicitly:
+    - longer names are matched first, so "Guest A" is not read as "Guest";
+    - a line that starts with a name the cast does not contain is dropped and counted,
+      not silently appended to the previous speaker's turn.
+    """
+    script = []
+    lines = raw_text.strip().split('\n')
+    ordered = sorted(speakers, key=len, reverse=True)
+    speaker_pattern = re.compile(
+        rf'^({"|".join(re.escape(s) for s in ordered)})\s*[:\-]\s*(.*)$', re.IGNORECASE
+    )
+    # A speaker label is a short run of non-space characters followed by a colon
+    # and a space. It must not rely on \\w, because Indic scripts use combining
+    # marks (category Mn) that \\w does not match, so "সঞ্চালক:" would not be
+    # recognised as a label at all.
+    unknown_prefix = re.compile(r"^([^\s:：]{1,40})\s*[:：]\s+")
+    dropped_lines = 0
+
+    current_speaker = None
+    current_content = ""
+
+    # Speaker labels the model wrote in the target language rather than the
+    # canonical names. They are mapped to the cast in order of first appearance,
+    # so a script that labels its speakers "সঞ্চালক:" and "অতিথি:" still gets two
+    # distinct voices instead of collapsing into one.
+    label_to_speaker: Dict[str, str] = {}
+    next_free_speaker = 0
+
+    def _canonical_key(name: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", name.lower())
+
+    canonical_by_key = {_canonical_key(name): name for name in speakers}
+
+    def speaker_for_label(label: str, known: Optional[str] = None) -> str:
+        """Map a speaker label to a cast member.
+
+        A label the model wrote in the target language takes the next unused cast
+        member, in order of first appearance. A label that is already a cast name
+        keeps its own voice, and moves the pointer past itself so a localised
+        label after it lands on the next member rather than back on the first.
+        A label that differs from a cast name only in case or punctuation
+        ("HOST:", "Guest.") is that cast member.
+        """
+        nonlocal next_free_speaker
+        key = label.strip().lower()
+        if key in label_to_speaker:
+            return label_to_speaker[key]
+        if known is not None:
+            assigned = known
+            index = next(
+                (i for i, name in enumerate(speakers) if name.lower() == known.lower()),
+                next_free_speaker,
+            )
+            next_free_speaker = max(next_free_speaker, index + 1)
+        else:
+            match = canonical_by_key.get(_canonical_key(label))
+            if match is not None:
+                assigned = match
+                index = next(
+                    (i for i, name in enumerate(speakers) if name is match),
+                    next_free_speaker,
+                )
+                next_free_speaker = max(next_free_speaker, index + 1)
+            elif next_free_speaker < len(speakers):
+                assigned = speakers[next_free_speaker]
+                next_free_speaker += 1
+            else:
+                assigned = speakers[-1]
+        label_to_speaker[key] = assigned
+        return assigned
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        match = speaker_pattern.match(line)
+        if match:
+            if current_speaker and current_content:
+                script.append({"speaker": current_speaker, "content": current_content.strip()})
+            spoken_name = match.group(1)
+            canonical = next((s for s in speakers if s.lower() == spoken_name.lower()), speakers[0])
+            current_speaker = speaker_for_label(spoken_name, canonical)
+            current_content = match.group(2)
+        else:
+            unknown = unknown_prefix.match(line)
+            if unknown:
+                # Looks like "Somebody: text" for a speaker we do not have. This
+                # happens most often in an Indic script, where the model writes the
+                # speaker's role in the target language ("সঞ্চালক:" for "Host") even
+                # though it was asked to keep the label in Latin script.
+                #
+                # Dropping the whole line loses the speech it contained, and letting
+                # it through as plain text speaks the label out loud. So drop the
+                # unfamiliar label, keep the words, and give the line to the cast
+                # member it maps to. Nothing false is spoken, and no content is lost.
+                dropped_lines += 1
+                assigned = speaker_for_label(unknown.group(1))
+                logger.warning(
+                    "Unknown speaker label %r; keeping the text under %r.",
+                    unknown.group(1)[:40],
+                    assigned,
+                )
+                remainder = line[unknown.end():].strip()
+                if current_speaker and current_content:
+                    script.append({"speaker": current_speaker, "content": current_content.strip()})
+                current_speaker = assigned
+                current_content = remainder
+            elif current_content:
+                current_content += " " + line
+            else:
+                current_content = line
+
+    if current_speaker and current_content:
+        script.append({"speaker": current_speaker, "content": current_content.strip()})
+
+    if dropped_lines:
+        logger.warning(
+            "Kept %d line(s) whose speaker label was not in the cast", dropped_lines
+        )
+    return script
+
 
 
 # ============== AI disclosure ==============
