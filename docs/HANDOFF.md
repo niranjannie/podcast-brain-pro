@@ -25,13 +25,15 @@
 > 3.14 — not because the dependency chain was fixed, but because it now runs on MLX
 > instead of PyTorch. See section 8 for the full verification record.
 >
-> **Update, fifth pass (2026-11-23, this session).** The option matrix was re-run after
-> the fourth-pass fixes, which exposed two more real defects: an Indic conversation
-> collapsed into a single voice, and the `/podcast/generate` response omitted the
-> `language` field so the skill's own validator rejected every non-English episode for
-> missing the English disclosure. Both are fixed and verified; see section 9. The
-> backend test count rose from 67 to 102, the build script was made to exclude build
-> junk instead of refusing to build, and the skill package was rebuilt and re-tested.
+> **Update, fifth pass (2026-11-23–25, this session).** The option matrix was re-run
+> after the fourth-pass fixes, which exposed two more real defects: an Indic
+> conversation collapsed into a single voice, and the `/podcast/generate` response
+> omitted the `language` field so the skill's own validator rejected every non-English
+> episode for missing the English disclosure. Both are fixed and verified; see section
+> 9. The backend test count rose from 67 to 102, the build script was made to exclude
+> build junk instead of refusing to build, and the skill package was rebuilt and
+> re-tested. Joeri replied on 2026-11-25; see section 10 for the full text and section
+> 9.5 for the action items.
 >
 > **One correction to the record.** `docs/FRESH_ASSESSMENT_2026-11.md` and
 > `docs/ROADMAP_NEXT_LEVEL.md` point at "the final verification record" in this file.
@@ -39,10 +41,11 @@
 > status banners and believe the verification was broader than section 8 says, check
 > sections 8 and 9 — they are deliberately narrower than the banners imply.
 
-Last updated: 2026-11-23 by the agent that ran the fifth pass (Indic parser fix,
-language field in response, build script, option matrix). Read this first, then
-`docs/PRODUCT_AUDIT_2026-11.md` (what was broken and what was fixed) and
-`docs/ROADMAP_NEXT_LEVEL.md` (what to do next).
+Last updated: 2026-11-25 by the agent that ran the fifth pass (Indic parser fix,
+language field in response, build script, option matrix, Agensi listing decision).
+Joeri's latest reply is recorded in section 10; tomorrow's action items are in
+section 9.5. Read this first, then `docs/PRODUCT_AUDIT_2026-11.md` (what was broken
+and what was fixed) and `docs/ROADMAP_NEXT_LEVEL.md` (what to do next).
 
 ---
 
@@ -681,12 +684,103 @@ Both are green for the tested languages after this pass.
 
 ### 9.4 What is still genuinely open after this pass
 
-- **Send the Agensi follow-up.** `docs/AGENSI_REPLY_2.md` is drafted but not sent.
-- **Upload the listing.** The package is built; the artifact is
-  `skill/podcast-brain-pro-skill.zip`. Price is $12 unless Joeri says the price is
-  locked at upload, in which case use $15.
-- **Short-script retry for Indic languages.** Optional, but the matrix makes it clear
-  the current behaviour is inconsistent.
-- **Decide whether to commit the corrected outreach files.** They are gitignored and
-  live only on this machine.
+**Joeri replied on 2026-11-25.** `docs/AGENSI_REPLY_2.md` was sent; his reply is below.
+There is no point asking follow-up questions, because he explicitly said he does not
+have the details that are still missing. The remaining work is action, not email.
+
+**What Joeri confirmed**
+
+- **$12 paid is acceptable.** He corrected the average order: it is around **$13**, not
+  $11. So $12 sits slightly below the average order and is a safe place to start.
+- **Creator pays nothing.** The buyer pays the skill price and the creator keeps 70%.
+- **Refund exposure has no known cap.** Refunds under the 30-day money-back guarantee,
+  chargebacks and fraud reverse the creator's 70%. If it was already paid out it is
+  clawed back or deducted from future payouts (terms 7.1). He does not have detail on
+  a cap.
+- **Stripe Connect covers Belgium.** This is the payout route for a Belgian resident.
+- **He has no details on:** Stripe Connect KYC documents, identity-check turnaround,
+  reviewed-update turnaround, or any Agensi-side AI Act label/metadata requirement for
+  media-generating skills.
+
+**What that means for the listing**
+
+- The only open commercial risk is uncapped refund exposure. The absolute number stays
+  small because the price is $12, so proceed.
+- The AI Act disclosure is already handled inside the skill (spoken line, validator,
+  RSS metadata). Agensi's terms place the responsibility on the creator for what the
+  skill provides, so the platform-side question is not blocking.
+
+### 9.5 Next steps — action items for the next session
+
+1. **Rebuild the skill package.** Do not use the zip already on disk without checking.
+   Run:
+   ```bash
+   cd /Volumes/DevSSD/projects/AI_VOICEVIBE
+   ./skill/build_package.sh
+   ```
+   The script prints the version and confirms the zip is valid. The artifact is
+   `skill/podcast-brain-pro-skill.zip`.
+
+2. **Go to `https://www.agensi.io/sell`** and create the listing.
+   - Skill name: use the `name` from `skill/podcast-brain-pro/SKILL.md` frontmatter.
+   - Price: **$12** (or $13 to match the corrected average order; $12 is already
+     written into the decision record and is fine).
+   - Payout: choose **Stripe Connect** because the creator is in Belgium.
+   - Upload: `skill/podcast-brain-pro-skill.zip`.
+
+3. **Complete Stripe Connect identity check.** Stripe will ask for the KYC documents
+   itself; Joeri does not have that detail. Start this immediately after creating the
+   listing, because nothing is paid out until it finishes.
+
+4. **Do not wait for Joeri's missing details.** He has already said he does not have
+   them. The listing can go live without answers on turnaround or AI Act platform
+   labels because the skill itself meets the legal requirement.
+
+5. **After upload:** watch the Agensi dashboard for views, installs and sales. If the
+   listing gets views and no sales for a week or two, consider moving the price to
+   $13 (the average) or down to $10. Do not change the price until there is data.
+
+### 9.6 Longer-term items (not tomorrow)
+
+- **Short-script retry for Indic languages.** Optional quality improvement. Some
+  2-minute requests in Kannada, Tamil and Telugu return under 300 words. The app
+  already reports `under_target=true`; a retry or language-specific budget would make
+  output more consistent.
+- **Decide whether to commit the corrected outreach files.** `MARKETING.md`,
+  `PROMO_AUDIO_SCRIPT.md`, `docs/HACKER_NEWS_POST.md`, `docs/REDDIT_POSTS.md` and
+  `docs/REDDIT_GUIDE.md` are gitignored, so their local corrections are not in the
+  repo. They still carry outdated claims on the public internet unless they are
+  un-ignored and committed.
+
+---
+
+## 10. Joeri's reply (2026-11-25)
+
+For reference, the full text of Joeri's reply that the next session should not need
+to re-derive:
+
+> Hi Niranjan,
+>
+> Listing paid at $12 is your call. One correction: the average order on Agensi is
+> around $13.. The buyer pays you the skill price and you keep 70%. You do not pay
+> Agensi anything.
+>
+> 1. Refund exposure: a refund under the 30 day money back guarantee reverses your
+>    share, as do chargebacks and fraud, and if it was already paid out it is taken
+>    back or deducted from future payouts (terms 7.1). I do not have that detail on
+>    a cap.
+>
+> 2. Payout route: Stripe Connect covers Belgium. I do not have that detail on the
+>    documents needed or how long the identity check takes.
+>
+> 3. Reviewed updates: I do not have that detail on the turnaround.
+>
+> On the EU AI Act, I do not have that detail on whether Agensi needs a label or
+> metadata field for media generating skills. Agensi.io/terms has the wording on
+> what creators must provide.
+>
+> Steps: Agensi.io/sell
+>
+> Best,
+> Joeri
 
