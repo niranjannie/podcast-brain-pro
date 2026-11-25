@@ -23,6 +23,7 @@ user_config.json
 
 # Outputs & logs
 *.log
+*.log.*
 *.pid
 *.mp3
 *.mp4
